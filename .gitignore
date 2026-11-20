@@ -1,4 +1,39 @@
 /build/
-/rom/*
-!/rom/README
+# /rom/* (the decompilation's; ignored whole below)
+
 __pycache__/
+
+# This repository is the PS Vita port only: kept locally, never committed
+# - the agents' skills
+/.agents/
+/.claude/
+/skills-lock.json
+# - the decompilation's own toolchain, tests and documentation (they live in the decompilation project)
+/.github/
+/tools/
+/docs/
+/rom/
+/data/
+/Makefile
+/build.bat
+/mvc2u.sub
+/mvc2test.sub
+/mvc2utest.sub
+/dcovl.sha1
+/functions.tsv
+# - the other platforms' ports (3DS, Windows) and their tools
+/ports/3DS.md
+/ports/port/ctr/
+/ports/port/cmake/3ds-*
+/ports/port/dist/
+/ports/port/sdl/mvc2.ico
+/ports/port/sdl/mvc2.rc.in
+/ports/port/sys/coro_win32.c
+/ports/port/sys/divzero_win32.c
+/ports/port/render/rd_gpu*
+/ports/port/tools/gpu_bench.c
+/ports/port/tools/gpu_shaders.sh
+/ports/port/tools/render_bench.c
+/ports/tools/
+# - builds and packages
+*.vpk

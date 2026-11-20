@@ -486,6 +486,11 @@ function(mvc2_executable TARGET)
         if(EXISTS ${PORT}/vita/shaders/pack.bin)
             list(APPEND VITA_ASSETS FILE ${PORT}/vita/shaders/pack.bin shaders/pack.bin)
         endif()
+        # the libraries' notices and licenses with every copy (vitaGL and vitaShaRK are LGPL-3.0, linked statically)
+        list(APPEND VITA_ASSETS FILE ${CMAKE_CURRENT_SOURCE_DIR}/NOTICE.md licenses/NOTICE.md)
+        foreach(lic GPL-3.0 LGPL-3.0 LGPL-2.1 math-neon-MIT)
+            list(APPEND VITA_ASSETS FILE ${CMAKE_CURRENT_SOURCE_DIR}/licenses/${lic}.txt licenses/${lic}.txt)
+        endforeach()
         # ATTRIBUTE2=12: the extended memory mode, for main RAM, the heap and the renderer's lists
         set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
         vita_create_vpk(${TARGET}.vpk ${VITA_TITLE_ID} ${TARGET}.self VERSION 01.00
