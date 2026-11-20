@@ -3,6 +3,7 @@
  * space (or through XMTRX, undivided, with NL_DISP_USEMATRIX), 1/z deep
  */
 
+#include "naomi_host.h"
 #include "nl_port.h"
 #include "prof.h"
 
@@ -104,6 +105,20 @@ static void strip(int num, int mode, const uint32_t* vt, int translucent) {
         v[i].u = v[i].v = 0.0f;
         v[i].base = vt[fmt[1]];
         v[i].offset = 0;
+    }
+    if (host_wide_x != 0.0f && !disp_coord) {
+        /* a box over the whole screen (a fade, a scene's shade, the pause's dark) over the wider one too
+           (ASPECT_RATIO=WIDE); a plain colour, so nothing stretches */
+        float lo = v[0].x, hi = v[0].x;
+        for (i = 1; i < num; i++) {
+            lo = v[i].x < lo ? v[i].x : lo;
+            hi = v[i].x > hi ? v[i].x : hi;
+        }
+        if (lo <= 0.5f && hi >= RD_WIDTH - 0.5f) {
+            for (i = 0; i < num; i++) {
+                v[i].x = v[i].x == lo ? -host_wide_x : v[i].x == hi ? RD_WIDTH + host_wide_x : v[i].x;
+            }
+        }
     }
     rd_strip(&s, v, num);
     PROF_STOP(PZ_NL_STRIP, t0);

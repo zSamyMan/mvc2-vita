@@ -298,6 +298,9 @@ void mes_puts( const MES_WORK *mw )
 /*			A line in the polygon font; "^" takes the next		*/
 /*			letter from the second half of the texture			*/
 /****************************************************************/
+/* the host's: how far a fight's line of text on the gauges' row moves with them on a screen wider than 4:3 */
+extern Float host_text_dx( Float x0, Float x1 ) ;
+
 void mes_font_disp( const MES_WORK *mw )
 {
 	NLVERTEX03 vt[4] ;
@@ -319,6 +322,12 @@ void mes_font_disp( const MES_WORK *mw )
 	x += option_w.adjust_x ;
 	y += option_w.adjust_y ;
 #endif
+	if( mw->y == Sys->disp_line ){
+		Uint8 *e ;
+
+		for( e = s ; *e ; e ++ ) ;
+		x += host_text_dx( x, x + ( e - s ) * 0.75f * mf->size ) ;
+	}
 	vt[0].x = x ;
 	vt[2].x = x ;
 	x += mf->size * mf->wide ;

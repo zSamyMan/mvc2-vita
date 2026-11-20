@@ -98,6 +98,9 @@ void host_poll(void);               /* from the game's busy waits: the interrupt
 void host_stub(const char* name);   /* a library routine the port lacks: says so once */
 void host_stub_report(void);
 unsigned host_frame(void);
+/* the game's pixels seen past each side of its 640 (ASPECT_RATIO=WIDE on the Vita: 103.5; else 0): the models
+   culled against the wider window (nl_obj.c), the fight's gauges moved out to the corners */
+extern float host_wide_x;
 extern uint32_t host_fills;         /* counts the port's writes into the game's memory: ROM and disc reads */
 void host_log(const char* fmt, ...);
 void host_divzero_install(void);    /* a division by zero gives 0, as SHC's code did */

@@ -6,6 +6,8 @@
 static VEC3 at03_ef7_rot = { 0.0f, 0.0f, 0.0f } ;	/* never used */
 static VEC3 at03_ef7_scale = { 1.0f, 1.0f, 1.0f } ;	/* never used */
 
+extern Float host_wide_scale( void ) ;	/* the host's: a model's width for a screen wider than 4:3 */
+
 static void at03_ef7_main( PLAYER_WORK *ew ) ;
 
 /****************************************************************/
@@ -18,6 +20,12 @@ void at03_ef7_set( void )
 		ew->work_func = at03_ef7_main ;
 		ew->obj = obj_dm07->obj[9] ;
 		ew->obj_flag = OBJ_FADE | OBJ_BRIGHT ;
+		if( host_wide_scale() > 1.0f ){	/* the PS Vita's ASPECT_RATIO=WIDE: wider, to the screen's sides */
+			ew->obj_flag |= OBJ_SCALE ;
+			ew->scale.x = host_wide_scale() ;
+			ew->scale.y = 1.0f ;
+			ew->scale.z = 1.0f ;
+		}
 	}
 }
 

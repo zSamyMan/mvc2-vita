@@ -14,6 +14,8 @@ static VEC3 sel_plate_rot = { 0.0f, 0.0f, 0.0f } ;	/* never used */
 
 static void sel_plate_main( PLAYER_WORK *ew );
 
+extern Float host_wide_scale( void ) ;	/* the host's: a model's width for a screen wider than 4:3 */
+
 /****************************************************************/
 /*			The plate behind the cards, whose texture			*/
 /*			scrolls												*/
@@ -28,6 +30,12 @@ void sel_plate_set( void )
 		ew->obj = obj_dm01->obj[6] ;
 		ew->pos = sel_plate_pos ;
 		ew->obj_flag = OBJ_POS | OBJ_BRIGHT ;
+		if( host_wide_scale() > 1.0f ){	/* the PS Vita's ASPECT_RATIO=WIDE: wider, to the screen's sides */
+			ew->obj_flag |= OBJ_SCALE ;
+			ew->scale.x = host_wide_scale() ;
+			ew->scale.y = 1.0f ;
+			ew->scale.z = 1.0f ;
+		}
 		obj_uv_clear( ew->obj ) ;
 	}
 }

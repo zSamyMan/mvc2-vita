@@ -395,6 +395,81 @@ static __attribute__((noinline)) const uint8_t* primitive(GROUP* g, const XFORM*
 extern float nl_focusX2, nl_focusY2;
 extern float nl_projectMatrixLeft, nl_projectMatrixTop, nl_projectMatrixWidth, nl_projectMatrixHeight;
 
+float host_wide_x;
+
+/* how much wider a scene's model must be to reach the sides of a screen wider than 4:3 (a few models made only
+   for the 4:3's view, the title's water): the half widths' ratio and a little more; 1 on 4:3 */
+float host_wide_scale(void) {
+    return host_wide_x != 0.0f ? (320.0f + host_wide_x) / 320.0f * 1.02f : 1.0f;
+}
+
+/* the fight's gauges (disp.c's front_disp, list 11) moved out to the screen's corners when it shows more than the
+   game's 640 (ASPECT_RATIO=WIDE): each model by where its origin lands, left of the middle by host_wide_x to the
+   left, right of it to the right, the middle's (the timer, the fight's words) left where they are */
+static int hud_on, hud_log_frame = -1;
+static int hud_groups;          /* a gauge whose origin is in the middle: each group moved by its own place */
+static unsigned hud_frame;      /* the game's frame (+1) whose gauges were drawn last */
+static float hud_dz = 24.0f;    /* MVC2_HUD_DZ: the middle's half width, in the game's pixels */
+static float hud_dz2 = 64.0f;   /* MVC2_HUD_DZ2: the same for a middle model's groups (the clock's stay) */
+
+static int hud_logging(void) {
+    return hud_log_frame >= 0 && host_frame() >= (unsigned)hud_log_frame && host_frame() < (unsigned)hud_log_frame + 2;
+}
+
+void host_hud(int on) {
+    static int read;
+    if (!read) {
+        read = 1;
+        if (getenv("MVC2_HUD_DZ") != NULL) {
+            hud_dz = (float)atof(getenv("MVC2_HUD_DZ"));
+        }
+        if (getenv("MVC2_HUD_DZ2") != NULL) {
+            hud_dz2 = (float)atof(getenv("MVC2_HUD_DZ2"));
+        }
+        if (getenv("MVC2_HUDLOG") != NULL) {
+            hud_log_frame = atoi(getenv("MVC2_HUDLOG"));
+        }
+    }
+    hud_on = on && host_wide_x != 0.0f;
+    hud_groups = 0;
+    if (hud_on) {
+        hud_frame = host_frame() + 1;
+    }
+}
+
+/* the fight's lines of text on the gauges' row (the score, the wins, PRESS START): moved as the gauges are, by
+   where the line's middle is, in a frame whose gauges were drawn; else 0 */
+float host_text_dx(float x0, float x1) {
+    float mid = (x0 + x1) * 0.5f;
+    if (host_wide_x == 0.0f || hud_frame != host_frame() + 1) {
+        return 0.0f;
+    }
+    return mid < 320.0f - hud_dz ? -host_wide_x : mid > 320.0f + hud_dz ? host_wide_x : 0.0f;
+}
+
+/* to_screen moved by the gauge's side: its x column takes dx times its w column, so every vertex lands dx further */
+static void hud_shift(const int* obj, float* to_screen) {
+    const float* m = nl_xmtrx();
+    float w0 = 0.0f, x0 = 0.0f, sx, dx;
+    int i;
+    for (i = 0; i < 4; i++) {
+        w0 += m[12 + i] * to_screen[i * 4];
+        x0 += m[12 + i] * to_screen[i * 4 + 1];
+    }
+    sx = w0 != 0.0f ? x0 / w0 : 320.0f;
+    dx = sx < 320.0f - hud_dz ? -host_wide_x : sx > 320.0f + hud_dz ? host_wide_x : 0.0f;
+    if (hud_logging()) {
+        host_log("hud: frame %u obj %p origin x %.1f: moved %.1f", host_frame(), (const void*)obj, (double)sx, (double)dx);
+    }
+    /* one in the middle (the clock, or both sides' hyper gauges in one model): its groups each by their own place */
+    hud_groups = dx == 0.0f;
+    if (dx != 0.0f) {
+        for (i = 0; i < 4; i++) {
+            to_screen[i * 4 + 1] += dx * to_screen[i * 4];
+        }
+    }
+}
+
 enum { SPHERE_OUT, SPHERE_FRONT, SPHERE_CUT };
 
 /* nlobjasm's test of a group's bounding sphere (s: centre, radius): out of sight, wholly in front of the
@@ -422,9 +497,11 @@ static int sphere(const float* m, const uint8_t* s, float scale, uint32_t* limit
     }
     rx = nl_focusX2 * -r;
     ry = nl_focusY2 * -r;
-    dx = sx - nl_projectMatrixLeft * w;
+    /* the window widened by what the screen shows past the game's sides (ASPECT_RATIO=WIDE) */
+    dx = sx - (nl_projectMatrixLeft - host_wide_x) * w;
     dy = sy - nl_projectMatrixTop * w;
-    if (!(dx > rx) || !(dy > ry) || dx > nl_projectMatrixWidth * w - rx || dy > nl_projectMatrixHeight * w - ry) {
+    if (!(dx > rx) || !(dy > ry) || dx > (nl_projectMatrixWidth + 2.0f * host_wide_x) * w - rx ||
+        dy > nl_projectMatrixHeight * w - ry) {
         return SPHERE_OUT;
     }
     return seen;
@@ -984,7 +1061,12 @@ static void draw(const int* obj, const float* model, const float* toscreen, floa
     uint32_t limit = word(nl_objput_param + 0x0c);
     GROUP g;
     XFORM x;    /* g.xf, where the strips' stores can't reach it */
+    float hud_base[16];
+    int groups = hud_on && hud_groups;
     mul(g.xf.m, model, toscreen);
+    if (groups) {
+        memcpy(hud_base, g.xf.m, sizeof hud_base);
+    }
     g.xf.l = model_light(model, 1.0f / scale_factor);
     gpu_put = -1;
 #ifdef MVC2_PROF
@@ -1001,6 +1083,23 @@ static void draw(const int* obj, const float* model, const float* toscreen, floa
         group_on = prof_groups > 0 && ++group_seq % prof_groups == 0;
         t0 = GROUP_NOW();
 #endif
+        if (groups) {
+            /* the group's bounding sphere's centre on the screen picks its side */
+            const float* b = hud_base;
+            float x = flt(p + 16), y = flt(p + 20), z = flt(p + 24);
+            float w = x * b[0] + y * b[4] + z * b[8] + b[12];
+            float sx = w != 0.0f ? (x * b[1] + y * b[5] + z * b[9] + b[13]) / w : 320.0f;
+            float dx = sx < 320.0f - hud_dz2 ? -host_wide_x : sx > 320.0f + hud_dz2 ? host_wide_x : 0.0f;
+            memcpy(g.xf.m, hud_base, sizeof hud_base);
+            if (dx != 0.0f) {
+                for (k = 0; k < 4; k++) {
+                    g.xf.m[k * 4 + 1] += dx * g.xf.m[k * 4];
+                }
+            }
+            if (hud_logging()) {
+                host_log("hud:   group centre x %.1f: moved %.1f", (double)sx, (double)dx);
+            }
+        }
         if (sphere(g.xf.m, p + 16, scale, &limit) == SPHERE_OUT) {
             p = end;
             continue;
@@ -1076,6 +1175,9 @@ static __attribute__((section(".text.nlhot"))) void put(const int* obj, float tr
         mul(to_screen, nl_view_matrix(), nl_cnv_proj_pers);
     } else {
         memcpy(to_screen, nl_cnv_proj_pers, sizeof to_screen);
+        if (hud_on) {
+            hud_shift(obj, to_screen);
+        }
     }
     if (obj_log_frame(&logged)) {
         host_log("obj %p view %d trnsl %g", (const void*)obj, use_view, (double)trnsl);

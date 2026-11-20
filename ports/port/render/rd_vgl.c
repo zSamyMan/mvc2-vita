@@ -726,6 +726,13 @@ static void depth_table(const RD_FRAME* f) {
 /* ---- the frame's vertices and batches ---- */
 
 static float view_x0, view_w;   /* the game's 640 by 480 on the screen */
+/* ASPECT_RATIO (env.txt): ORIGINAL the game's 4:3 between pillars; STRETCHED its 640 across the screen; WIDE the
+   whole screen at the 4:3's scale, the game's x from game_x0 for game_w (-103.5 to 743.5): the 640 in the middle,
+   what the game draws past its sides seen in the rest */
+enum { ASPECT_ORIGINAL, ASPECT_STRETCHED, ASPECT_WIDE };
+static int aspect_mode = ASPECT_WIDE;
+static float game_x0 = 0.0f, game_w = RD_WIDTH;
+static float ndc_kx = 2.0f / RD_WIDTH, ndc_bx = -1.0f;    /* x in the game's pixels to the viewport's -1..1 */
 
 /* d goes to the depth buffer as it is (glDepthRange -1 to 1, a float buffer). A level triangle (a sprite: one 1/w at
    its three corners) has nothing to correct for perspective: drawn with w 1, d is not multiplied then divided by w,
@@ -737,7 +744,7 @@ static void put_vtx(VTX* o, const RD_VTX* v, const RD_VTX* colours, const RD_STA
     float w = 1.0f / v->z, pw = level && depth_mode == 0 ? 1.0f : w;
     d *= depth_scale;
     uint32_t b = colours->base, k = s->offset ? colours->offset : 0;
-    o->x = (v->x * (2.0f / RD_WIDTH) - 1.0f) * pw;
+    o->x = (v->x * ndc_kx + ndc_bx) * pw;
     o->y = (1.0f - v->y * (2.0f / RD_HEIGHT)) * pw;
     o->z = (depth_mode == 1 ? 2.0f * d - 1.0f : depth_mode == 2 ? 0.5f + 0.5f * d : d) * pw;
     o->w = pw;
@@ -2429,7 +2436,8 @@ static void program_source(int i, char* defs, size_t room, const char** src) {
         /* the snap's geometry in its own programs only: the others' source (and pack hash) is the viewport's own */
         size_t at = strlen(defs);
         snprintf(defs + at, room - at, "#define SNAP_ORIGIN float2(%.6f, 0.0)\n#define SNAP_SCALE float2(%.8f, %.8f)\n",
-                 (double)view_x0 + snap_ox, (double)RD_WIDTH / view_w, (double)RD_HEIGHT / SCREEN_H);
+                 (double)(view_x0 - game_x0 * view_w / game_w) + snap_ox, (double)game_w / view_w,
+                 (double)RD_HEIGHT / SCREEN_H);
     }
     src[0] = defs, src[1] = fs_head, src[2] = fs_main[i % P_KINDS];
 }
@@ -3100,7 +3108,7 @@ static void save_shot(const char* prefix, unsigned no) {
 /* the frame's batches into dump_<frame>.txt, written once */
 static void dump_batches(void) {
     static const char* const lists[] = { "opaque", "punch", "trans" };
-    size_t room = 256 + (size_t)nbatches * 300 + (size_t)nverts * 90, n = 0;
+    size_t room = 256 + (size_t)nbatches * 300 + (size_t)nverts * 130, n = 0;
     char* out = malloc(room);
     char name[96];
     SceUID fd;
@@ -3130,14 +3138,14 @@ static void dump_batches(void) {
                       i, lists[b->list], b->count / 3, b->tex ? b->tex->w : 0, b->tex ? b->tex->h : 0,
                       b->tex ? b->tex->format : -1, s->palette, s->shading, s->tex_alpha, s->use_alpha, s->bilinear,
                       s->offset, s->fog, s->uv_mode, s->depth, s->zwrite, s->src, s->dst,
-                      v->w > 0 ? (v->x / v->w + 1) * 320 : 0, v->w > 0 ? (1 - v->y / v->w) * 240 : 0,
+                      v->w > 0 ? (v->x / v->w - ndc_bx) / ndc_kx : 0, v->w > 0 ? (1 - v->y / v->w) * 240 : 0,
                       v->w > 0 ? v->z / v->w : 0, v->base[3], v->base[0], v->base[1], v->base[2]);
         /* a small batch's every vertex: x, y in the game's pixels, its depth, the game's z (1/w), u, v, colours */
-        for (k = 0; b->count <= 300 && k < b->count && n < room - 100; k++) {
+        for (k = 0; b->count <= 3000 && k < b->count && n < room - 100; k++) {
             const VTX* q = &verts[b->first + k];
             float iw = q->w > 0 ? 1.0f / q->w : 0;
             n += snprintf(out + n, room - n, "    %8.2f %8.2f d %.7f z %.7f uv %.4f %.4f c %02X%02X%02X%02X o %02X%02X%02X%02X\n",
-                          (q->x * iw + 1) * 320, (1 - q->y * iw) * 240, q->z * iw, q->fw > 0 ? 1.0f / q->fw : 0, q->u, q->v,
+                          (q->x * iw - ndc_bx) / ndc_kx, (1 - q->y * iw) * 240, q->z * iw, q->fw > 0 ? 1.0f / q->fw : 0, q->u, q->v,
                           q->base[3], q->base[0], q->base[1], q->base[2], q->offs[3], q->offs[0], q->offs[1], q->offs[2]);
         }
     }
@@ -3310,7 +3318,9 @@ static void draw_frame(void) {
         /* in the left pillar, over everything */
         static const float zero[4] = { 0, 0, 0, 0 }, decal[4] = { 0, 0, 0, 1 }, size[4] = { 0, 0, OV_W, OV_H };
         float x0 = 2.0f / SCREEN_W * 2 - 1, x1 = (2.0f + OV_W) / SCREEN_W * 2 - 1;
-        float y0 = 1 - 2.0f / SCREEN_H * 2, y1 = 1 - (2.0f + OV_H) / SCREEN_H * 2;
+        /* WIDE has no pillar: below the gauges then */
+        float top = aspect_mode == ASPECT_WIDE ? 140.0f : 2.0f;
+        float y0 = 1 - top / SCREEN_H * 2, y1 = 1 - (top + OV_H) / SCREEN_H * 2;
         VTX q[6];
         const float xy[6][4] = { { x0, y0, 0, 0 }, { x1, y0, 1, 0 }, { x0, y1, 0, 1 },
                                  { x0, y1, 0, 1 }, { x1, y0, 1, 0 }, { x1, y1, 1, 1 } };
@@ -3346,10 +3356,24 @@ static int render_main(SceSize args, void* argp) {
     if (aspect == NULL) {
         aspect = config_get("aspect");
     }
-    view_w = SCREEN_H * 4.0f / 3.0f;
-    if (aspect != NULL && strcmp(aspect, "stretch") == 0) {
-        view_w = SCREEN_W;
+    {
+        const char* ar = getenv("ASPECT_RATIO");
+        if (ar != NULL) {
+            aspect_mode = strcasecmp(ar, "ORIGINAL") == 0 ? ASPECT_ORIGINAL
+                          : strcasecmp(ar, "STRETCHED") == 0 ? ASPECT_STRETCHED : ASPECT_WIDE;
+        } else if (aspect != NULL) {
+            aspect_mode = strcmp(aspect, "stretch") == 0 ? ASPECT_STRETCHED : ASPECT_ORIGINAL;
+        }
     }
+    view_w = aspect_mode == ASPECT_ORIGINAL ? SCREEN_H * 4.0f / 3.0f : SCREEN_W;
+    if (aspect_mode == ASPECT_WIDE) {
+        /* the vertical's scale across: 847 of the game's pixels on the 960, 103.5 more each side */
+        game_w = SCREEN_W * (float)RD_HEIGHT / SCREEN_H;
+        game_x0 = (RD_WIDTH - game_w) * 0.5f;
+        host_wide_x = -game_x0;
+    }
+    ndc_kx = 2.0f / game_w;
+    ndc_bx = -game_x0 * ndc_kx - 1.0f;
     /* whole and even: vitaGL's glViewport halves the width with a shift (725 drew 724 wide from 117), and the
        snap's game pixels must be exactly the ones the geometry lands on */
     view_w = (float)((int)view_w & ~1);
@@ -3432,6 +3456,9 @@ static int render_main(SceSize args, void* argp) {
     }
     seams_fix = getenv("MVC2_SEAMS") == NULL || atoi(getenv("MVC2_SEAMS")) != 0;
     memset(&cur, 0xFF, sizeof cur);
+    host_log("vgl: aspect %s: the game's x %.1f to %.1f on the screen's %.0f from x %.0f",
+             aspect_mode == ASPECT_WIDE ? "WIDE" : aspect_mode == ASPECT_STRETCHED ? "STRETCHED" : "ORIGINAL",
+             game_x0, game_x0 + game_w, view_w, view_x0);
     host_log("vgl: started, %dx%d, the game at %.0fx%d from x %.0f; free VRAM %u KB, RAM %u KB", SCREEN_W, SCREEN_H,
              view_w, SCREEN_H, view_x0, (unsigned)(vglMemFree(VGL_MEM_VRAM) >> 10), (unsigned)(vglMemFree(VGL_MEM_RAM) >> 10));
     control_on = getenv("MVC2_CONTROL") != NULL && atoi(getenv("MVC2_CONTROL")) != 0;

@@ -11,6 +11,8 @@ extern void obj_uv_get( Float *x, Float *y ) ;
 extern void obj_uv_put( Float *x, Float *y ) ;
 extern void obj_uv_clear( void *obj ) ;
 
+extern Float host_wide_scale( void ) ;	/* the host's */
+
 static void at03_ef5_main( PLAYER_WORK *ew ) ;
 
 /****************************************************************/
@@ -23,6 +25,13 @@ void at03_ef5_set( void )
 		ew->work_func = at03_ef5_main ;
 		ew->obj = obj_dm07->obj[7] ;
 		ew->obj_flag = 0 ;
+		/* a screen wider than 4:3 (the PS Vita's ASPECT_RATIO=WIDE): the water made wider, past its sides */
+		if( host_wide_scale() > 1.0f ){
+			ew->obj_flag |= OBJ_SCALE ;
+			ew->scale.x = host_wide_scale() ;
+			ew->scale.y = 1.0f ;
+			ew->scale.z = 1.0f ;
+		}
 		obj_uv_clear( obj_dm07->obj[7] ) ;
 	}
 }

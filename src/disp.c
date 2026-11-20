@@ -632,11 +632,17 @@ static void front_ef_disp( void )
 }
 
 /*==============================================================*/
+/* the host's: the fight's gauges drawn between host_hud( 1 ) and host_hud( 0 ), moved to the screen's corners
+   when it is wider than the game's 4:3 (the PS Vita's ASPECT_RATIO=WIDE) */
+extern void host_hud( int on ) ;
+
 static void front_disp( void )
 {
 	scr_2d_matrix_set() ;
 	obj_calc_list( 11 ) ;
+	host_hud( 1 ) ;
 	obj_disp_list( 11 ) ;
+	host_hud( 0 ) ;
 	if( Sys->play_mode == 64 ) return ;
 	front_ef_disp() ;
 }

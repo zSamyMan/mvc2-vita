@@ -4,6 +4,8 @@
 #include "shinobi.h"
 #include "dm.h"
 
+extern Float host_wide_scale( void ) ;	/* the host's: a model's width for a screen wider than 4:3 */
+
 /* the uv scroll of a model */
 
 void dm0c_menu_move( PLAYER_WORK *w ) ;
@@ -201,6 +203,7 @@ void wall_paper_init( PLAYER_WORK *w, OBJ_FILE *file, int no )
 	w->fade.r = wall_col_tbl[w->sub_type].x ;
 	w->fade.g = wall_col_tbl[w->sub_type].y ;
 	w->fade.b = wall_col_tbl[w->sub_type].z ;
+	w->scale.x = host_wide_scale() ;	/* the PS Vita's ASPECT_RATIO=WIDE: to the screen's sides (1 on 4:3) */
 }
 
 /****************************************************************/
