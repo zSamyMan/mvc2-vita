@@ -34,10 +34,18 @@ static const BINDING pad_defaults[ACTIONS][4] = {
     { BUTTON(DPAD_RIGHT), AXIS(LEFTX, 1) },
     { BUTTON(WEST) },
     { BUTTON(NORTH) },
+#ifdef __vita__
+    /* the Vita has no triggers: assist 1 on L, assist 2 on R */
+    { BUTTON(LEFT_SHOULDER) },
+    { BUTTON(SOUTH) },
+    { BUTTON(EAST) },
+    { BUTTON(RIGHT_SHOULDER) },
+#else
     { BUTTON(RIGHT_SHOULDER), BUTTON(LEFT_SHOULDER) },
     { BUTTON(SOUTH) },
     { BUTTON(EAST) },
     { AXIS(RIGHT_TRIGGER, 1), AXIS(LEFT_TRIGGER, 1) },
+#endif
     { BUTTON(START) },
     { BUTTON(BACK) },
 };
@@ -242,6 +250,10 @@ int input_pad_player(SDL_JoystickID id) {
 }
 
 int input_menu_combo(int pl) {
+#ifdef __vita__
+    (void)pl;
+    return 0;       /* the controls screen is drawn by SDL's renderer, which the Vita's GPU build has not */
+#endif
     return pads[pl] != NULL && SDL_GetGamepadButton(pads[pl], SDL_GAMEPAD_BUTTON_BACK) &&
            SDL_GetGamepadButton(pads[pl], SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
 }

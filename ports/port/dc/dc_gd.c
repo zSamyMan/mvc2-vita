@@ -26,6 +26,12 @@ struct GDS_FS_HANDLE {
 #ifdef __3DS__
     char name[32];
 #endif
+#ifdef __vita__
+    char* first;        /* the file read from its start into first, on to next */
+    char* next;
+    char vname[32];     /* a lazily opened file's name (f is LAZY until it is opened) */
+    const uint8_t* mem; /* a file read into memory: its bytes, copied from here (fmemopen's reads went in pieces) */
+#endif
 };
 
 static char root[1024];
@@ -61,8 +67,15 @@ const char* dc_disc_missing(const char* dir) {
     return NULL;
 }
 
+#ifdef __vita__
+static void cache_start(void);
+#endif
+
 int dc_gd_open(const char* disc_path) {
     snprintf(root, sizeof root, "%s", disc_path);
+#ifdef __vita__
+    cache_start();
+#endif
     return 1;
 }
 
@@ -342,6 +355,392 @@ static void keep_close_all(void) {
         }
     }
 }
+#elif defined(__vita__)
+#include <psp2/kernel/processmgr.h>
+
+/* the disc's files on the memory card: each open and read timed, and a frame whose took more than 20 ms said in the
+   log (MVC2_TRACE_GD=1: every one) */
+static int trace = -1;
+static unsigned gd_frame, gd_reads, gd_opens;
+static char gd_names[64];      /* the files opened in the frame, the first few */
+static uint64_t gd_us, gd_open_us, gd_bytes;
+
+static uint64_t read_begin(void) {
+    return sceKernelGetProcessTimeWide();
+}
+
+static void gd_account(const char* what, uint64_t t0, size_t bytes, int open) {
+    uint64_t us = sceKernelGetProcessTimeWide() - t0;
+    if (trace < 0) {
+        trace = getenv("MVC2_TRACE_GD") != NULL;
+    }
+    if (host_frame() != gd_frame) {
+        if (gd_us + gd_open_us > 20000) {
+            host_log("gd: frame %u: %u reads, %u KB in %.1f ms; %u opens in %.1f ms (%s)", gd_frame, gd_reads,
+                     (unsigned)(gd_bytes >> 10), gd_us / 1000.0, gd_opens, gd_open_us / 1000.0, gd_names);
+        }
+        gd_frame = host_frame();
+        gd_us = gd_open_us = gd_bytes = 0;
+        gd_reads = gd_opens = 0;
+        gd_names[0] = 0;
+    }
+    if (open) {
+        size_t at = strlen(gd_names);
+        if (at < sizeof gd_names - 16) {
+            snprintf(gd_names + at, sizeof gd_names - at, "%s%s", at ? " " : "", what);
+        }
+        gd_opens++;
+        gd_open_us += us;
+    } else {
+        gd_reads++;
+        gd_us += us;
+        gd_bytes += bytes;
+    }
+    if (trace) {
+        host_log("gd %s %u KB in %.1f ms (frame %u)", what, (unsigned)(bytes >> 10), us / 1000.0, host_frame());
+    }
+}
+
+#define read_end(what, t0, bytes) gd_account(what, t0, bytes, 0)
+
+/* the game's requested reads (gdFsReqRd32: am_load.c's, the fighters' data) done by a thread on core 2, the handle
+   READ until it is done, so that the game keeps its frames going as it would on the console's drive */
+#include <psp2/kernel/threadmgr.h>
+static SceUID vreader = 0, vreq;
+static GDFS volatile vjob_gd;
+static volatile Sint32 vjob_nsct;
+static void* volatile vjob_buf;
+static volatile int vjob_busy;
+static void read_sectors(GDFS gd, Sint32 nsct, void* buf);
+
+static int vreader_main(SceSize args, void* argp) {
+    (void)args, (void)argp;
+    for (;;) {
+        sceKernelWaitSema(vreq, 1, NULL);
+        read_sectors(vjob_gd, vjob_nsct, vjob_buf);
+        vjob_busy = 0;
+    }
+    return 0;
+}
+
+static int vreader_start(void) {
+    if (vreader == 0) {
+        vreq = sceKernelCreateSema("gd_req", 0, 0, 1, NULL);
+        vreader = sceKernelCreateThread("gd_reader", vreader_main, 165, 32 * 1024, 0, 0x00040000, NULL);
+        {
+            extern void rd_vgl_watch_thread(const char* name, int id) __attribute__((weak));
+            if (rd_vgl_watch_thread && vreader >= 0) {
+                rd_vgl_watch_thread("RDR", vreader);
+            }
+        }
+        if (vreader < 0 || sceKernelStartThread(vreader, 0, NULL) < 0) {
+            vreader = -1;
+        }
+    }
+    return vreader > 0;
+}
+
+static void async_wait(GDFS gd) {
+    while (vjob_busy && vjob_gd == gd) {
+        sceKernelDelayThread(500);
+    }
+}
+
+/*
+ * The disc's files in memory. The game reads its screens', menus' and stages' files whole and waits for them (a
+ * title or a select screen held up 200 to 450 ms by the memory card). So a thread on core 2 reads them into a
+ * block of memory while the intro plays: the screens' and menus' files first, the stages' last; the fighters' (PL,
+ * read by am_load.c on its own while the game goes on) and the music (ADX, read ahead by dc_adx.c) are left out. An
+ * open of a file read in is a stream over its bytes (fmemopen), so the rest of this file reads it as any other.
+ * MVC2_GD_CACHE=0: none; =MB: at most that many.
+ */
+#include <psp2/io/dirent.h>
+#include <psp2/kernel/sysmem.h>
+#define CACHE_FILES 768
+static struct {
+    char name[24];
+    uint32_t off, size;
+    volatile int ready;
+} cached[CACHE_FILES];
+static int ncached;
+static uint8_t* cache_mem;
+static uint32_t cache_size;
+static SceUID cache_thread;
+
+/* every file the listing saw, with its size: an open of one not in memory needs no card access then (an open
+   takes 20 to 150 ms on the memory card, the game's thread waiting in gdFsOpen): the file is opened by the
+   reader with its first requested read, or by the first read here. MVC2_GD_LAZY=0: opened in gdFsOpen */
+#define LISTED_MOST 1024
+static struct {
+    char name[24];
+    uint32_t size;
+} listed[LISTED_MOST];
+static volatile int nlisted;
+static FILE lazy_mark;
+#define LAZY (&lazy_mark)
+
+static int listed_size(const char* name, Sint32* size) {
+    int i, n = nlisted;
+    static int on = -1;
+    if (on < 0) {
+        on = getenv("MVC2_GD_LAZY") == NULL || atoi(getenv("MVC2_GD_LAZY")) != 0;
+    }
+    for (i = 0; on && i < n; i++) {
+        if (strcmp(listed[i].name, name) == 0) {
+            *size = (Sint32)listed[i].size;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* the game's own card accesses (its opens and reads, here or on the reader) ahead of the threads that read for later
+   (the files into memory, the songs' heads): those wait while one is under way and for FG_QUIET after, and read
+   in BG_PIECE pieces, so that a game's open never waits behind seconds of their reading on a slow memory card */
+#define FG_QUIET 40000      /* us */
+#define BG_PIECE (256u << 10)
+static volatile int fg_n;
+static volatile uint64_t fg_t;
+static uint64_t bg_waited;
+
+static void fg_begin(void) {
+    __sync_fetch_and_add(&fg_n, 1);
+}
+
+static void fg_end(void) {
+    fg_t = sceKernelGetProcessTimeWide();
+    __sync_synchronize();
+    __sync_fetch_and_sub(&fg_n, 1);
+}
+
+static void bg_wait(void) {
+    uint64_t t0 = 0;
+    while (fg_n > 0 || sceKernelGetProcessTimeWide() - fg_t < FG_QUIET) {
+        if (t0 == 0) {
+            t0 = sceKernelGetProcessTimeWide();
+        }
+        sceKernelDelayThread(5000);
+    }
+    if (t0 != 0) {
+        bg_waited += sceKernelGetProcessTimeWide() - t0;
+    }
+}
+
+/* a file whole into dst, in pieces, giving way to the game's accesses before each */
+static int bg_read(FILE* f, uint8_t* dst, uint32_t size) {
+    uint32_t done = 0;
+    while (done < size) {
+        uint32_t n = size - done < BG_PIECE ? size - done : BG_PIECE;
+        bg_wait();
+        if (fread(dst + done, 1, n, f) != n) {
+            return 0;
+        }
+        done += n;
+    }
+    return 1;
+}
+
+/* the music files' first HEAD_BYTES, read before the rest (each open costs the card 20 to 150 ms, and the game's
+   thread opened a song and read its start as it began playing): its header and the song's first second or so
+   from memory, while dc_adx.c's reader reads the whole file */
+#define HEAD_BYTES (256u << 10)   /* some 5 s of a song: dc_adx.c's reader is well ahead by then */
+#define HEADS_MOST 96
+static struct {
+    char name[24];
+    uint8_t* data;
+    uint32_t len;
+} heads[HEADS_MOST];
+static volatile int nheads;
+
+const uint8_t* dc_gd_head(const char* name, uint32_t* len) {
+    int i, n = nheads;
+    for (i = 0; i < n; i++) {
+        if (strcmp(heads[i].name, name) == 0) {
+            *len = heads[i].len;
+            return heads[i].data;
+        }
+    }
+    return NULL;
+}
+
+static void read_heads(void) {
+    int i, n = nlisted, got = 0;
+    uint64_t t0 = sceKernelGetProcessTimeWide();
+    for (i = 0; i < n && nheads < HEADS_MOST; i++) {
+        char path[1200];
+        FILE* f;
+        uint32_t want;
+        uint8_t* d;
+        if (strncmp(listed[i].name, "ADX", 3) != 0 || listed[i].size == 0) {
+            continue;
+        }
+        want = listed[i].size < HEAD_BYTES ? listed[i].size : HEAD_BYTES;
+        if ((d = malloc(want)) == NULL) {
+            break;
+        }
+        snprintf(path, sizeof path, "%s/%s", root, listed[i].name);
+        bg_wait();
+        if ((f = fopen(path, "rb")) == NULL) {
+            free(d);
+            continue;
+        }
+        setvbuf(f, NULL, _IONBF, 0);
+        if (bg_read(f, d, want)) {
+            snprintf(heads[nheads].name, sizeof heads[0].name, "%s", listed[i].name);
+            heads[nheads].data = d;
+            heads[nheads].len = want;
+            __sync_synchronize();
+            nheads++;
+            got++;
+        } else {
+            free(d);
+        }
+        fclose(f);
+    }
+    host_log("gd: the first %u KB of %d music files read in %.1f s", HEAD_BYTES >> 10, got,
+             (sceKernelGetProcessTimeWide() - t0) / 1e6);
+}
+
+static int cache_rank(const char* n) {
+    static const char* const first[] = { "DM", "S_", "SE", "EN", "2_", "S2", "S1", "AS" };
+    int i;
+    if (strncmp(n, "PL", 2) == 0) {
+        return 10;      /* the fighters' voices, faces and win poses: after the screens', before the stages' */
+    }
+    if (strncmp(n, "ST", 2) == 0) {
+        return 90;
+    }
+    for (i = 0; i < (int)(sizeof first / sizeof first[0]); i++) {
+        if (strncmp(n, first[i], 2) == 0) {
+            return i;
+        }
+    }
+    return 50;
+}
+
+static int cache_cmp(const void* a, const void* b) {
+    const char *x = ((const char*)a), *y = ((const char*)b);
+    int rx = cache_rank(x), ry = cache_rank(y);
+    return rx != ry ? rx - ry : strcmp(x, y);
+}
+
+/* the list (the directory's entries: each one can take milliseconds here, so not on the game's thread), the
+   memory, then the files; a file can be opened from memory once its ready is set */
+static int cache_main(SceSize args, void* argp) {
+    uint64_t t0 = sceKernelGetProcessTimeWide();
+    const char* e = getenv("MVC2_GD_CACHE");
+    uint32_t budget = (e != NULL ? (uint32_t)atoi(e) : 96u) << 20, total = 0, done = 0;
+    static char names[CACHE_FILES][24];
+    static uint32_t sizes[CACHE_FILES], offs[CACHE_FILES];
+    SceIoDirent ent;
+    SceUID dir, block = -1;
+    int i, n = 0, got = 0;
+    (void)args, (void)argp;
+    if ((dir = sceIoDopen(root)) < 0) {
+        host_log("gd: could not list %s (%08X): no files in memory", root, dir);
+        return 0;
+    }
+    while (sceIoDread(dir, &ent) > 0 && n < CACHE_FILES) {
+        if (!SCE_S_ISDIR(ent.d_stat.st_mode) && strlen(ent.d_name) < sizeof listed[0].name && nlisted < LISTED_MOST) {
+            snprintf(listed[nlisted].name, sizeof listed[0].name, "%s", ent.d_name);
+            listed[nlisted].size = (uint32_t)ent.d_stat.st_size;
+            __sync_synchronize();
+            nlisted++;
+        }
+        /* not the music (read ahead by dc_adx.c) nor the fighters' data (PLxx_DAT, read by am_load.c while the game
+           goes on); their voices, faces and win poses yes, read whole as a fighter is picked or speaks */
+        if (SCE_S_ISDIR(ent.d_stat.st_mode) || strncmp(ent.d_name, "ADX", 3) == 0 ||
+            (strncmp(ent.d_name, "PL", 2) == 0 && strstr(ent.d_name, "_DAT") != NULL) ||
+            strlen(ent.d_name) >= sizeof names[0] || ent.d_stat.st_size == 0 || ent.d_stat.st_size > (8u << 20)) {
+            continue;
+        }
+        snprintf(cached[n].name, sizeof cached[0].name, "%s", ent.d_name);
+        cached[n].size = (uint32_t)ent.d_stat.st_size;
+        n++;
+    }
+    sceIoDclose(dir);
+    read_heads();
+    qsort(cached, (size_t)n, sizeof cached[0], cache_cmp);
+    for (i = 0; i < n; i++) {
+        if (total + cached[i].size > budget) {
+            n = i;      /* the rest, by rank the last wanted, not kept */
+            break;
+        }
+        cached[i].off = total;
+        total += (cached[i].size + 63u) & ~63u;
+    }
+    /* as much of it as there is memory for */
+    while (total > 0) {
+        block = sceKernelAllocMemBlock("gd_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (total + 0xFFFFFu) & ~0xFFFFFu, NULL);
+        if (block >= 0) {
+            break;
+        }
+        while (n > 0 && cached[n - 1].off + cached[n - 1].size > total * 3 / 4) {
+            n--;
+        }
+        total = n > 0 ? cached[n - 1].off + cached[n - 1].size : 0;
+    }
+    if (block < 0 || sceKernelGetMemBlockBase(block, (void**)&cache_mem) < 0) {
+        host_log("gd: no memory to keep the disc's files in (%08X)", block);
+        return 0;
+    }
+    cache_size = total;
+    __sync_synchronize();
+    ncached = n;        /* the list shown to gdFsOpen, none ready yet */
+    host_log("gd: reading %d files, %u KB, into memory, listed in %.1f s (MVC2_GD_CACHE)", n, (unsigned)(total >> 10),
+             (sceKernelGetProcessTimeWide() - t0) / 1e6);
+    for (i = 0; i < n; i++) {
+        char path[1200];
+        FILE* f;
+        snprintf(path, sizeof path, "%s/%s", root, cached[i].name);
+        bg_wait();
+        f = fopen(path, "rb");
+        if (f == NULL) {
+            continue;
+        }
+        setvbuf(f, NULL, _IONBF, 0);
+        if (bg_read(f, cache_mem + cached[i].off, cached[i].size)) {
+            __sync_synchronize();
+            cached[i].ready = 1;
+            done += cached[i].size;
+            got++;
+        }
+        fclose(f);
+    }
+    (void)names, (void)sizes, (void)offs;
+    host_log("gd: %d files, %u KB, read into memory in %.1f s (%.1f s of it giving way to the game's reads)", got,
+             (unsigned)(done >> 10), (sceKernelGetProcessTimeWide() - t0) / 1e6, bg_waited / 1e6);
+    return 0;
+}
+
+static void cache_start(void) {
+    const char* e = getenv("MVC2_GD_CACHE");
+    if (cache_thread != 0 || (e != NULL && atoi(e) == 0)) {
+        return;
+    }
+    cache_thread = sceKernelCreateThread("gd_cache", cache_main, 185, 64 * 1024, 0, 0x00040000, NULL);
+        {
+            extern void rd_vgl_watch_thread(const char* name, int id) __attribute__((weak));
+            if (rd_vgl_watch_thread && cache_thread >= 0) {
+                rd_vgl_watch_thread("CACHE", cache_thread);
+            }
+        }
+    if (cache_thread < 0 || sceKernelStartThread(cache_thread, 0, NULL) < 0) {
+        host_log("gd: no thread to read the disc's files into memory (%08X)", cache_thread);
+    }
+}
+
+/* a stream over a file read into memory, or NULL; its bytes in *mem */
+static FILE* cache_open(const char* name, const uint8_t** mem) {
+    int i;
+    for (i = 0; i < ncached; i++) {
+        if (cached[i].ready && strcmp(cached[i].name, name) == 0) {
+            *mem = cache_mem + cached[i].off;
+            return fmemopen(cache_mem + cached[i].off, cached[i].size, "rb");
+        }
+    }
+    return NULL;
+}
 #else
 #define read_begin() 0
 #define read_end(what, t0, bytes) ((void)(t0))
@@ -351,8 +750,23 @@ static void keep_close_all(void) {
 static FILE* open_file(const char* name) {
     char path[1200];
     FILE* f;
+#ifdef __vita__
+    uint64_t t_open = read_begin();
+#endif
     snprintf(path, sizeof path, "%s/%s", root, name);
+#ifdef __vita__
+    fg_begin();
+#endif
     f = fopen(path, "rb");
+#ifdef __vita__
+    fg_end();
+    gd_account(name, t_open, 0, 1);
+    /* unbuffered, so newlib reads a request whole into the game's memory in one call: through stdio's buffer a
+       large read was cut into small ones, at about 3.4 MB/s (MVC2_GD_NOBUF=0: buffered) */
+    if (f != NULL && (getenv("MVC2_GD_NOBUF") == NULL || atoi(getenv("MVC2_GD_NOBUF")) != 0)) {
+        setvbuf(f, NULL, _IONBF, 0);
+    }
+#endif
 #ifdef __3DS__
     if (no_buf < 0) {
         no_buf = getenv("MVC2_GD_NOBUF") != NULL && atoi(getenv("MVC2_GD_NOBUF")) != 0;
@@ -368,7 +782,7 @@ static FILE* open_file(const char* name) {
     return f;
 }
 
-#ifdef __3DS__
+#if defined(__3DS__) || defined(__vita__)
 const char* dc_gd_path(const char* name) {
     static char path[1200];
     snprintf(path, sizeof path, "%s/%s", root, name);
@@ -399,7 +813,11 @@ Sint32 gdFsInit(Sint32 max_open, void* work, Sint32 max_dirent, void* dirbuf) {
 
 void gdFsFinish(void) {
     int i;
+#ifdef __vita__
+    async_wait(vjob_gd);
+#else
     async_wait(async_gd);
+#endif
 #ifdef __3DS__
     ctr_ahead_drop(1);
     ctr_small_drop();
@@ -407,6 +825,9 @@ void gdFsFinish(void) {
 #endif
     for (i = 0; i < GD_MAX_OPEN; i++) {
         if (files[i].f != NULL) {
+#ifdef __vita__
+            if (files[i].f != LAZY)
+#endif
             fclose(files[i].f);
             files[i].f = NULL;
         }
@@ -433,6 +854,18 @@ GDFS gdFsOpen(const char* fname, void* dirrec) {
             progs_after_open(fname);
             snprintf(gd->name, sizeof gd->name, "%s", fname);
             snprintf(opened[opened_n++ % 16], sizeof opened[0], "%s", fname);
+#elif defined(__vita__)
+            gd->vname[0] = 0;
+            gd->mem = NULL;
+            if ((gd->f = cache_open(fname, &gd->mem)) == NULL) {
+                gd->mem = NULL;
+                if (vreader_start() && listed_size(fname, &gd->size)) {
+                    snprintf(gd->vname, sizeof gd->vname, "%s", fname);
+                    gd->f = LAZY;
+                } else {
+                    gd->f = open_file(fname);
+                }
+            }
 #else
             gd->f = open_file(fname);
 #endif
@@ -440,9 +873,14 @@ GDFS gdFsOpen(const char* fname, void* dirrec) {
                 host_log("gdFsOpen: no %s on the disc", fname);
                 return NULL;
             }
+#ifdef __vita__
+            if (gd->f != LAZY)
+#endif
 #ifndef __3DS__
-            fseek(gd->f, 0, SEEK_END);
-            gd->size = (Sint32)ftell(gd->f);
+            {
+                fseek(gd->f, 0, SEEK_END);
+                gd->size = (Sint32)ftell(gd->f);
+            }
 #endif
             if (getenv("MVC2_TRACE_GD")) {
                 host_log("gd %s %X (frame %u)", fname, gd->size, host_frame());
@@ -465,6 +903,9 @@ void gdFsClose(GDFS gd) {
             fclose(gd->f);
         }
 #else
+#ifdef __vita__
+        if (gd->f != LAZY)
+#endif
         fclose(gd->f);
 #endif
         gd->f = NULL;
@@ -484,6 +925,19 @@ static void read_sectors(GDFS gd, Sint32 nsct, void* buf) {
     size_t want = (size_t)nsct * GDD_SCT_SIZE, got = 0;
     PROF_START(t1);
     host_fills++;
+#ifdef __vita__
+    if (gd->f == LAZY) {
+        FILE* f = open_file(gd->vname);     /* on the reader, for a requested read */
+        if (f == NULL) {
+            host_log("gd: %s could not be opened for its read", gd->vname);
+            memset(buf, 0, (size_t)nsct * GDD_SCT_SIZE);
+            gd->pos += (long)nsct * GDD_SCT_SIZE;
+            gd->stat = GDD_STAT_COMPLETE;
+            return;
+        }
+        gd->f = f;
+    }
+#endif
     if (gd->pos < gd->size) {
         uint64_t t0 = read_begin();
 #ifdef __3DS__
@@ -492,11 +946,37 @@ static void read_sectors(GDFS gd, Sint32 nsct, void* buf) {
 #else
         size_t n = want;
 #endif
-        fseek(gd->f, gd->pos, SEEK_SET);
-        got = fread(buf, 1, n, gd->f);
+#ifdef __vita__
+        if (gd->mem != NULL) {
+            got = (size_t)(gd->size - gd->pos) < n ? (size_t)(gd->size - gd->pos) : n;
+            memcpy(buf, gd->mem + gd->pos, got);
+        } else
+#endif
+        {
+#ifdef __vita__
+            fg_begin();
+#endif
+            fseek(gd->f, gd->pos, SEEK_SET);
+            got = fread(buf, 1, n, gd->f);
+#ifdef __vita__
+            fg_end();
+#endif
+        }
         read_end("read", t0, got);
     }
     memset((char*)buf + got, 0, want - got);
+#ifdef __vita__
+    /* a whole file read into one place: a model file's pointers say 0x0C..., the Vita's RAM is at 0x8C... */
+    if (gd->pos == 0) {
+        gd->first = buf;
+    } else if ((char*)buf != gd->next) {
+        gd->first = NULL;
+    }
+    gd->next = (char*)buf + want;
+    if (gd->first != NULL && gd->pos < gd->size && gd->pos + (long)want >= gd->size) {
+        vita_relocate_file(gd->first, (size_t)gd->size);
+    }
+#endif
     gd->pos += (long)want;
     gd->stat = GDD_STAT_COMPLETE;
     PROF_STOP(PZ_GD_READ, t1);
@@ -561,6 +1041,18 @@ Sint32 gdFsReqRd32(GDFS gd, Sint32 nsct, void* buf) {
         async_due = due;
         gd->stat = GDD_STAT_READ;
         async_gd = gd;
+        return nsct;
+    }
+#endif
+#ifdef __vita__
+    if (vreader_start()) {
+        if (vjob_busy) {
+            return 0;                   /* the drive busy: asked again */
+        }
+        gd->stat = GDD_STAT_READ;
+        vjob_gd = gd, vjob_nsct = nsct, vjob_buf = buf;
+        vjob_busy = 1;
+        sceKernelSignalSema(vreq, 1);
         return nsct;
     }
 #endif

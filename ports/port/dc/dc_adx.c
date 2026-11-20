@@ -18,6 +18,10 @@
 #ifdef __3DS__
 #include <3ds.h>
 #endif
+#ifdef __vita__
+#include <stdio.h>
+#include <psp2/kernel/threadmgr.h>
+#endif
 
 #define ADX_SECTORS 16
 #define ADX_BUF (ADX_SECTORS * GDD_SCT_SIZE)
@@ -46,6 +50,11 @@ struct _adx_talk {
     int16_t out[2];
     uint8_t buf[ADX_BUF];
     uint32_t buf_off, buf_len;  /* the file's bytes in buf */
+#ifdef __vita__
+    const uint8_t* head;        /* the file's first head_len bytes, kept in memory by dc_gd.c */
+    uint32_t head_len;
+    int pre_on;                 /* the reader is reading this file whole: bytes past head wait for it */
+#endif
 };
 
 static struct _adx_talk player;
@@ -237,8 +246,143 @@ static int ahead_ready(const struct _adx_talk* p, uint32_t n) {
 }
 #endif
 
+#ifdef __vita__
+/*
+ * The Vita's memory card takes some 20 ms for any read, and a read of the music's next 32 KB now and then (on the
+ * host's thread, in the frame's sound) took up to 140 ms: a stutter every few seconds of a fight. So the whole file
+ * is read into memory by a thread on core 2 as it starts playing, 64 KB at a time, and the player takes its bytes
+ * from there; only those not read yet (the song's first moment) are read here as before. A new song bumps the
+ * generation: the reader leaves the old one at its next piece, and the buffer is reused once it has.
+ */
+#define PRE_PIECE (64u << 10)
+#define PRE_ROOM (8u << 20)     /* the largest song (ADX_*.BIN) is under 6 MB: one buffer, never moved */
+static struct {
+    SceUID thread, go, lock;
+    uint8_t* data;              /* PRE_ROOM bytes, the reader's: allocated once, so never moved under the player */
+    volatile uint32_t size;     /* the wanted song's size (0: none), set by pre_start */
+    volatile uint32_t ready;    /* bytes of the song the reader is on, read so far */
+    volatile int gen;           /* the wanted song's generation, bumped by pre_start */
+    volatile int cur;           /* the generation the reader is on: its bytes count only when it is gen */
+    volatile int busy;
+    char want[1200];            /* the wanted song's path, under lock */
+    uint32_t want_size;
+} pre;
+
+/* the bytes the player may take: the reader is on the song wanted, so far */
+static uint32_t pre_ready(void) {
+    int g = pre.gen;
+    __sync_synchronize();
+    return pre.cur == g ? pre.ready : 0;
+}
+
+static int pre_main(SceSize args, void* argp) {
+    (void)args, (void)argp;
+    for (;;) {
+        int gen;
+        uint32_t size;
+        char path[1200];
+        FILE* f;
+        sceKernelWaitSema(pre.go, 1, NULL);
+        sceKernelLockMutex(pre.lock, 1, NULL);
+        gen = pre.gen;
+        size = pre.want_size;
+        snprintf(path, sizeof path, "%s", pre.want);
+        sceKernelUnlockMutex(pre.lock, 1);
+        if (size == 0 || pre.cur == gen) {
+            continue;       /* none wanted, or a signal for the song already read */
+        }
+        pre.busy = 1;
+        pre.ready = 0;
+        __sync_synchronize();
+        pre.cur = gen;
+        f = fopen(path, "rb");
+        if (f == NULL) {
+            host_log("adx: could not open %s to read it ahead", path);
+        }
+        if (f != NULL) {
+            setvbuf(f, NULL, _IONBF, 0);
+            while (pre.ready < size && pre.gen == gen) {
+                uint32_t n = size - pre.ready < PRE_PIECE ? size - pre.ready : PRE_PIECE;
+                if (fread(pre.data + pre.ready, 1, n, f) != n) {
+                    break;
+                }
+                __sync_synchronize();
+                pre.ready += n;
+            }
+            fclose(f);
+            host_log("adx: %s read ahead, %u of %u KB%s", path, (unsigned)(pre.ready >> 10), (unsigned)(size >> 10),
+                     pre.gen == gen ? "" : " (left for the next song)");
+        }
+        pre.busy = 0;
+    }
+    return 0;
+}
+
+/* the next song for the reader (size 0: none), at once: the game's thread never waits for the reader to leave the
+   old one (on a slow memory card its open or piece in hand took seconds, the game held up meanwhile); the player
+   takes the new song's head from memory, then silence, until the reader is on it */
+static void pre_start(const char* fname, uint32_t size) {
+    if (pre.thread == 0) {
+        pre.data = malloc(PRE_ROOM);
+        pre.go = sceKernelCreateSema("adx_pre", 0, 0, 1, NULL);
+        pre.lock = sceKernelCreateMutex("adx_pre", 0, 0, NULL);
+        pre.thread = pre.data == NULL ? -1 : sceKernelCreateThread("adx_reader", pre_main, 170, 32 * 1024, 0, 0x00040000, NULL);
+        {
+            extern void rd_vgl_watch_thread(const char* name, int id) __attribute__((weak));
+            if (rd_vgl_watch_thread && pre.thread >= 0) {
+                rd_vgl_watch_thread("ADX", pre.thread);
+            }
+        }
+        if (pre.thread < 0 || sceKernelStartThread(pre.thread, 0, NULL) < 0) {
+            pre.thread = -1;
+        }
+    }
+    if (pre.thread < 0) {
+        pre.size = 0;
+        if (size != 0) {
+            host_log("adx: no reader thread: the music is read as it plays");
+        }
+        return;
+    }
+    if (size > PRE_ROOM) {
+        size = 0;           /* not read ahead: read as it plays */
+    }
+    sceKernelLockMutex(pre.lock, 1, NULL);
+    if (size != 0) {
+        snprintf(pre.want, sizeof pre.want, "%s", dc_gd_path(fname));
+    }
+    pre.want_size = size;
+    pre.size = size;
+    __sync_synchronize();
+    pre.gen++;
+    sceKernelUnlockMutex(pre.lock, 1);
+    if (size != 0) {
+        sceKernelSignalSema(pre.go, 1);
+    }
+}
+#endif
+
 /* the file's bytes at off (n of them, n at most a sector), read in when they are not in the buffer */
 static const uint8_t* bytes_at(ADXT p, uint32_t off, uint32_t n) {
+#ifdef __vita__
+    if (off + n <= pre_ready()) {
+        return pre.data + off;
+    }
+    if (p->head != NULL && off + n <= p->head_len) {
+        return p->head + off;
+    }
+    if (p->pre_on && pre.size > 0 && (pre.busy || pre.cur != pre.gen)) {
+        /* not read yet: a read here would wait behind the reader's on the memory card (once 4 s, the game
+           held up); a moment of silence instead, the reader soon past it */
+        static const uint8_t silence[GDD_SCT_SIZE * 2] = { 0 };
+        static unsigned told;
+        if (told++ < 8) {
+            host_log("adx: byte %u not read yet (%u of %u): silence (frame %u)", off, (unsigned)pre_ready(),
+                     (unsigned)pre.size, host_frame());
+        }
+        return n <= sizeof silence ? silence : p->head;
+    }
+#endif
 #ifdef __3DS__
     if (ah.on) {
         const uint8_t* b = ahead_at(p, off, n);
@@ -280,6 +424,9 @@ static const uint8_t* bytes_at(ADXT p, uint32_t off, uint32_t n) {
 static void close_files(ADXT p) {
 #ifdef __3DS__
     ahead_stop();
+#endif
+#ifdef __vita__
+    pre_start(NULL, 0);
 #endif
     if (p->gd != NULL) {
         gdFsClose(p->gd);
@@ -652,6 +799,9 @@ void ADXT_StartFname(ADXT adxt, char* fname) {
         return;
     }
     adxt->buf_off = adxt->buf_len = 0;
+#ifdef __vita__
+    adxt->head = dc_gd_head(fname, &adxt->head_len);
+#endif
     if (!open_header(adxt)) {
         host_log("adx: %s is not a 4-bit ADX file", fname);
         halt(adxt);
@@ -665,6 +815,17 @@ void ADXT_StartFname(ADXT adxt, char* fname) {
     adxt->pause = 0;
 #ifdef __3DS__
     ahead_start(adxt, fname);
+#endif
+#ifdef __vita__
+    {
+        Sint32 fsize = 0;
+        if (gdFsGetFileSize(adxt->gd, &fsize) && fsize > 0) {
+            pre_start(fname, (uint32_t)fsize);
+            adxt->pre_on = pre.size > 0;
+        } else {
+            host_log("adx: %s: no size to read it ahead by", fname);
+        }
+    }
 #endif
     FILL_LOCK();
     adxt->stat = ADXT_STAT_PLAYING;

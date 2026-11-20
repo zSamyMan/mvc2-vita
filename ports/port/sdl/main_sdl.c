@@ -20,6 +20,14 @@
 #include "input_sdl.h"
 #include "menu_sdl.h"
 #include "test_mode.h"
+#ifdef __vita__
+#include <psp2/io/stat.h>
+#include "vita_sys.h"
+#endif
+#ifdef MVC2_VITAGL
+#include "rd_vgl.h"
+static int vgl_on;          /* the frame drawn by rd_vgl.c's render thread; SDL only reads the pad and plays sound */
+#endif
 
 void sdl_audio_open(void);         /* sdl_audio.c */
 void sdl_audio_frame(void);
@@ -152,7 +160,7 @@ static void read_frame(void) {
 /* MVC2_SHOT=n,m,...: frames saved as shot_n.bmp */
 static void screenshot(void) {
     const char* list = getenv("MVC2_SHOT");
-    char want[16], name[32];
+    char want[16], name[96];
     if (list == NULL) {
         return;
     }
@@ -167,7 +175,12 @@ static void screenshot(void) {
         }
         list += n + 1;
     }
+#ifdef __vita__
+    sceIoMkdir(VITA_DATA_DIR "shots", 0777);
+    snprintf(name, sizeof name, VITA_DATA_DIR "shots/soft_%06u.bmp", presented);
+#else
     snprintf(name, sizeof name, "shot_%u.bmp", presented);
+#endif
 #ifdef MVC2_SDL3
     /* MVC2_SHOTVIEW=1: the picture as the window shows it */
     if (gpu && getenv("MVC2_SHOTVIEW") != NULL) {
@@ -337,9 +350,48 @@ static void show(SDL_Texture* t) {
     SDL_RenderPresent(renderer);
 }
 
+#ifdef __vita__
+static Uint64 audio_ticks, audio_worst, run_worst;  /* sdl_audio_frame's (with its wait for the queue); the game's */
+
+/* every 2 s in mvc2.log: the game's time a frame (its own work: not the wait for the screen) and the
+   presenting's, and the frame rate */
+static void vita_perf_line(void) {
+    static Uint64 since, game_at, draw_at;
+    static unsigned frames_at;
+    Uint64 now = SDL_GetPerformanceCounter(), freq = SDL_GetPerformanceFrequency();
+    if (since == 0) {
+        since = now, game_at = game_ticks, draw_at = draw_ticks, frames_at = times_frames;
+    } else if (now - since >= 2 * freq) {
+        unsigned n = times_frames - frames_at;
+        host_log("perf: %.1f fps | game %.2f ms (worst %.1f), of it sound %.2f (worst %.1f) | present %.2f ms a frame "
+                 "(frame %u)", n * (double)freq / (now - since), (game_ticks - game_at) * 1000.0 / freq / n,
+                 run_worst * 1000.0 / freq, audio_ticks * 1000.0 / freq / n, audio_worst * 1000.0 / freq,
+                 (draw_ticks - draw_at) * 1000.0 / freq / n, presented);
+#ifdef MVC2_VITAGL
+        rd_vgl_game_stats((float)((game_ticks - game_at) * 1000.0 / freq / n), (float)(audio_ticks * 1000.0 / freq / n),
+                          (float)(run_worst * 1000.0 / freq));
+#endif
+        audio_ticks = audio_worst = run_worst = 0;
+        since = now, game_at = game_ticks, draw_at = draw_ticks, frames_at = times_frames;
+    }
+}
+#endif
+
 void host_present(void) {
     SDL_Texture* t = screen;
     Uint64 start = SDL_GetPerformanceCounter();
+#ifdef MVC2_VITAGL
+    if (vgl_on) {
+        rd_vgl_present();
+        rd_begin_frame();
+        presented++;
+        draw_ticks += SDL_GetPerformanceCounter() - start;
+        times_frames++;
+        present_ticks += SDL_GetPerformanceCounter() - start;
+        vita_perf_line();
+        return;
+    }
+#endif
 #ifdef MVC2_SDL3
     if (gpu) {
         t = gpu_frame();
@@ -362,6 +414,9 @@ void host_present(void) {
     }
     show(t);
     present_ticks += SDL_GetPerformanceCounter() - start;
+#ifdef __vita__
+    vita_perf_line();
+#endif
 }
 
 #ifdef MVC2_SDL3
@@ -592,6 +647,9 @@ static int window_key(const SDL_Event* e) {
 }
 
 static void save_window(void) {
+    if (window == NULL) {
+        return;
+    }
     char size[32];
     const char* was = config_get("window");
     int w, h;
@@ -745,6 +803,19 @@ int main(int argc, char** argv) {
     long frames_left = getenv("MVC2_FRAMES") ? atol(getenv("MVC2_FRAMES")) : -1;
 
     test_run = frames_left >= 0;
+#ifdef __vita__
+    vita_early_init();
+#ifdef MVC2_VITAGL
+    vgl_on = getenv("MVC2_RENDERER") == NULL || strcmp(getenv("MVC2_RENDERER"), "soft") != 0;
+    if (vgl_on) {
+        setenv("MVC2_FPS", "0", 1);     /* the vertical blank paces the frames */
+    }
+#endif
+    /* the software renderer's bands on three of the four cores (the fourth is the system's) */
+    if (getenv("MVC2_RDTHREADS") == NULL) {
+        setenv("MVC2_RDTHREADS", "3", 0);
+    }
+#endif
 
     if (!naomi_map_ram()) {
         fprintf(stderr, "could not map main RAM at %08X\n", NAOMI_RAM_BASE);
@@ -756,11 +827,25 @@ int main(int argc, char** argv) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | (test_run ? 0 : SDL_INIT_GAMEPAD))) {
 #else
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#ifdef MVC2_VITAGL
+    if (SDL_Init((vgl_on ? 0 : SDL_INIT_VIDEO) | SDL_INIT_EVENTS | SDL_INIT_AUDIO |
+                 (test_run ? 0 : SDL_INIT_GAMECONTROLLER)) != 0) {
+#else
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | (test_run ? 0 : SDL_INIT_GAMECONTROLLER)) != 0) {
+#endif
 #endif
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+#ifdef MVC2_VITAGL
+    if (vgl_on) {
+        const char* pick_message(void);     /* start.c */
+        if (!pick_game(argc, argv)) {
+            host_log("stopped: %s", pick_message());    /* no window to say it in */
+            return 1;
+        }
+    } else
+#endif
     if (!pick_game(argc, argv) && !missing_screen(argc, argv)) {
         return 1;
     }
@@ -769,7 +854,15 @@ int main(int argc, char** argv) {
     view_settings();
 #endif
     input_init();
+#ifdef MVC2_VITAGL
+    if (vgl_on && !rd_vgl_init()) {
+        host_log("vgl: the GPU renderer could not start");
+        return 1;
+    }
+    if (!vgl_on && window == NULL && !open_window()) {
+#else
     if (window == NULL && !open_window()) {
+#endif
         fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
@@ -841,7 +934,29 @@ int main(int argc, char** argv) {
         {
             Uint64 start = SDL_GetPerformanceCounter(), presenting = present_ticks;
             naomi_run_frame();
+#ifdef __vita__
+            {
+                Uint64 a0 = SDL_GetPerformanceCounter();
+                sdl_audio_frame();
+                audio_ticks += SDL_GetPerformanceCounter() - a0;
+                if (SDL_GetPerformanceCounter() - a0 > audio_worst) {
+                    audio_worst = SDL_GetPerformanceCounter() - a0;
+                }
+                if (a0 - start - (present_ticks - presenting) > run_worst) {
+                    run_worst = a0 - start - (present_ticks - presenting);
+                }
+#ifdef MVC2_VITAGL
+                if (vgl_on) {
+                    Uint64 f = SDL_GetPerformanceFrequency();
+                    rd_vgl_trace_game(presented, (unsigned)((a0 - start - (present_ticks - presenting)) * 1000000 / f),
+                                      (unsigned)((SDL_GetPerformanceCounter() - a0) * 1000000 / f));
+                }
+#endif
+            }
+            vita_frame();
+#else
             sdl_audio_frame();
+#endif
             game_ticks += SDL_GetPerformanceCounter() - start - (present_ticks - presenting);
         }
         if (frames_left > 0 && --frames_left == 0) {

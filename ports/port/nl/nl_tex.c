@@ -112,6 +112,9 @@ static int unpack_level(int kind, int w, int h, const void* data, void* out) {
                 for (x = 0; x < w; x += 8) {
                     const uint8_t* s = b + ((col[x] + twiddle_row[y]) >> 1);
                     uint8_t* o = (uint8_t*)out + y * w + x;
+                    if (x + 8 < w) {
+                        __builtin_prefetch(b + ((col[x + 8] + twiddle_row[y]) >> 1));
+                    }
                     BLOCK8(o, w, NIBBLE);
                 }
             }
@@ -135,6 +138,9 @@ static int unpack_level(int kind, int w, int h, const void* data, void* out) {
                 for (x = 0; x < w; x += 8) {
                     const uint8_t* s = b + col[x] + twiddle_row[y];
                     uint8_t* o = (uint8_t*)out + y * w + x;
+                    if (x + 8 < w) {
+                        __builtin_prefetch(b + col[x + 8] + twiddle_row[y]);
+                    }
                     BLOCK8(o, w, TEXEL);
                 }
             }
@@ -158,6 +164,10 @@ static int unpack_level(int kind, int w, int h, const void* data, void* out) {
                 for (x = 0; x < w; x += 8) {
                     const uint16_t* s = p + col[x] + twiddle_row[y];
                     uint16_t* o = (uint16_t*)out + y * w + x;
+                    if (x + 8 < w) {
+                        __builtin_prefetch(p + col[x + 8] + twiddle_row[y]);
+                        __builtin_prefetch(p + col[x + 8] + twiddle_row[y] + 32);
+                    }
                     BLOCK8(o, w, TEXEL);
                 }
             }
@@ -188,6 +198,7 @@ static int unpack_level(int kind, int w, int h, const void* data, void* out) {
         /* a block's texels in the codebook: (0, 0), (0, 1), (1, 0), (1, 1) */
         for (y = 0; y < h; y += 2) {
             const uint8_t* row = index + twiddle_row[y / 2];
+            __builtin_prefetch(index + twiddle_row[y / 2 + (y + 2 < h)] + 64);
             uint16_t* o = (uint16_t*)out + y * w;
             for (x = 0; x < w; x += 2) {
                 const uint16_t* c = p + row[col[x / 2]] * 4;
@@ -374,6 +385,9 @@ static uint64_t source_hash64(const void* src, size_t n) {
     size_t i = 0;
     if (((uintptr_t)src & 3) == 0) {
         for (; i + 4 <= n / 4; i += 4) {
+            if ((i & 7) == 0) {
+                __builtin_prefetch(p + i + 64);    /* 256 bytes ahead: the game's RAM read cold, a line at a time */
+            }
             a = (p[i] ^ ROR16(a)) * 0x9E3779B1u;
             b = (p[i + 1] ^ ROR16(b)) * 0x85EBCA77u;
             a = (p[i + 2] ^ ROR16(a)) * 0x9E3779B1u;
@@ -432,13 +446,18 @@ static size_t texel_bytes(int type, int w, int h, size_t* texel) {
 
 static void retire(void* texels);
 
-#ifdef __3DS__
+#if defined(__3DS__) || defined(__vita__)
 /* MVC2_TEX_KEEP_FREED=1: a small texture the game frees kept as it was, with its serial, while the kept ones come to
    no more than KEEP_MOST bytes; loaded again from a source of the same hash it is back as it was, unpacked again
    from none (the game frees its sprites' textures at a screen change and loads the same ones after). Any other load
    into the slot lets go of it as the free would have */
+#ifdef __vita__
+#define KEEP_ONE (64u << 10)        /* the Vita has the memory: the screens' sprites and fonts come back whole */
+#define KEEP_MOST (16u << 20)
+#else
 #define KEEP_ONE 4096
 #define KEEP_MOST (1u << 20)
+#endif
 static int keep_on = -1;
 static uint8_t kept_freed[NL_MAX_TEX];
 static size_t kept_bytes;
@@ -447,7 +466,11 @@ static uint32_t kept_back;
 static int keep_freed(void) {
     if (keep_on < 0) {
         const char* e = getenv("MVC2_TEX_KEEP_FREED");
+#ifdef __vita__
+        keep_on = e == NULL || strcmp(e, "0") != 0;     /* on unless MVC2_TEX_KEEP_FREED=0 */
+#else
         keep_on = e != NULL && strcmp(e, "0") != 0;
+#endif
         if (keep_on) {
             host_log("textures: small ones the game frees kept, for the same source loaded again (MVC2_TEX_KEEP_FREED)");
         }
@@ -475,9 +498,18 @@ static void kept_let_go_all(void) {
 }
 #endif
 
+#ifdef __vita__
+#include <psp2/kernel/processmgr.h>
+extern int vita_debug;      /* DEBUG_OPTIONS: the timing below only with the testing tools on */
+/* a frame's texture loads taking 10 ms or more, in the log (the load frames' time on the game's thread) */
+static unsigned tl_frame, tl_count, tl_hashed_kb, tl_skipped, tl_same, tl_unpacked;
+static uint64_t tl_us, tl_pixels, tl_hash_us;
+#endif
+
 /* the texels are copied, so the game may reuse the memory */
 static int tex_load(NL_TEX* t, const NLthd* thd) {
     int w = thd->width, h = thd->height, kind = thd->type >> 8 & 0xff, levels = 0;
+    const void* src = host_ram_ptr(thd->address);
     size_t texel, bytes, room, n;
     uint64_t hash;
     if (w <= 0 || h <= 0 || w > 1024 || h > 1024) {
@@ -491,16 +523,28 @@ static int tex_load(NL_TEX* t, const NLthd* thd) {
     bytes = texel_bytes(thd->type, w, h, &texel);
     n = source_size(kind, w, h);
     if (t->loaded && t->type == thd->type && t->tex.width == w && t->tex.height == h && t->tex.levels == levels &&
-        n != 0 && hash_ok[t - nl_tex] && tex_skip() && last_load[t - nl_tex].src == thd->address &&
+        n != 0 && hash_ok[t - nl_tex] && tex_skip() && last_load[t - nl_tex].src == src &&
         last_load[t - nl_tex].frame == host_frame() && last_load[t - nl_tex].fills == host_fills &&
         last_load[t - nl_tex].serial == t->tex.serial) {
+#ifdef __vita__
+        tl_skipped++;
+#endif
         return 1;
     }
-    last_load[t - nl_tex].src = thd->address;
+    last_load[t - nl_tex].src = src;
     last_load[t - nl_tex].frame = host_frame();
     last_load[t - nl_tex].fills = host_fills;
-    hash = n != 0 ? source_hash64(thd->address, n) : 0;
-#ifdef __3DS__
+#ifdef __vita__
+    uint64_t h0 = vita_debug ? sceKernelGetProcessTimeWide() : 0;
+#endif
+    hash = n != 0 ? source_hash64(src, n) : 0;
+#ifdef __vita__
+    if (vita_debug) {
+        tl_hash_us += sceKernelGetProcessTimeWide() - h0;
+        tl_hashed_kb += (unsigned)(n >> 10);
+    }
+#endif
+#if defined(__3DS__) || defined(__vita__)
     if (kept_freed[t - nl_tex]) {
         if (t->type == thd->type && t->tex.width == w && t->tex.height == h && t->tex.levels == levels && n != 0 &&
             loaded_hash[t - nl_tex] == hash) {
@@ -515,9 +559,15 @@ static int tex_load(NL_TEX* t, const NLthd* thd) {
 #endif
     if (t->loaded && t->type == thd->type && t->tex.width == w && t->tex.height == h && t->tex.levels == levels) {
         if (n != 0 && hash_ok[t - nl_tex] && loaded_hash[t - nl_tex] == hash) {
+#ifdef __vita__
+            tl_same++;
+#endif
             return 1;                                   /* the same source: the same texels and serial */
         }
-        t->loaded = unpack_again(t, thd->address, bytes, texel);
+#ifdef __vita__
+        tl_unpacked++;
+#endif
+        t->loaded = unpack_again(t, src, bytes, texel);
         loaded_hash[t - nl_tex] = hash;
         hash_ok[t - nl_tex] = n != 0 && t->loaded;
         return t->loaded;
@@ -527,7 +577,7 @@ static int tex_load(NL_TEX* t, const NLthd* thd) {
     if (t->tex.texels == NULL || t->bytes < room) {
         free(t->tex.texels);
         t->tex.texels = host_try_malloc(room);
-#ifdef __3DS__
+#if defined(__3DS__) || defined(__vita__)
         if (t->tex.texels == NULL && kept_bytes != 0) {
             kept_let_go_all();
             t->tex.texels = host_try_malloc(room);
@@ -548,18 +598,38 @@ static int tex_load(NL_TEX* t, const NLthd* thd) {
     t->tex.levels = levels;
     set_mips(&t->tex, texel);
     t->type = thd->type;
-    t->loaded = unpack_texels(&t->tex, thd->type, thd->address);
-    keep_source(t, thd->address, bytes);
+    t->loaded = unpack_texels(&t->tex, thd->type, src);
+    keep_source(t, src, bytes);
     t->tex.serial = ++serials;
     loaded_hash[t - nl_tex] = hash;
     hash_ok[t - nl_tex] = n != 0 && t->loaded;
     return t->loaded;
 }
 
+
 int nl_tex_load(NL_TEX* t, const NLthd* thd) {
     PROF_START(t0);
+#ifdef __vita__
+    uint64_t v0 = vita_debug ? sceKernelGetProcessTimeWide() : 0;
+    if (vita_debug && host_frame() != tl_frame) {
+        if (tl_us >= 10000) {
+            host_log("tex: frame %u: %u loads, %u K texels, in %.1f ms (hashing %u KB %.1f ms; %u skipped, %u the same, "
+                     "%u unpacked again)", tl_frame, tl_count, (unsigned)(tl_pixels >> 10), tl_us / 1000.0, tl_hashed_kb,
+                     tl_hash_us / 1000.0, tl_skipped, tl_same, tl_unpacked);
+        }
+        tl_frame = host_frame(), tl_count = 0, tl_us = 0, tl_pixels = 0;
+        tl_hash_us = 0, tl_hashed_kb = tl_skipped = tl_same = tl_unpacked = 0;
+    }
+#endif
     int r = tex_load(t, thd);
     last_load[t - nl_tex].serial = t->tex.serial;
+#ifdef __vita__
+    if (vita_debug) {
+        tl_us += sceKernelGetProcessTimeWide() - v0;
+    }
+    tl_count++;
+    tl_pixels += (uint64_t)t->tex.width * (uint64_t)t->tex.height;
+#endif
     PROF_STOP(PZ_NL_TEX, t0);
     return r;
 }
@@ -714,7 +784,7 @@ void nl_tex_frame(void) {
     if (!rd_discard) {
         drawn++;
     }
-#ifdef __3DS__
+#if defined(__3DS__) || defined(__vita__)
     if (keep_on > 0 && host_frame() % 600 == 0) {
         host_log("textures: %lu freed ones loaded again from the same source, %lu KB kept (MVC2_TEX_KEEP_FREED)",
                  (unsigned long)kept_back, (unsigned long)(kept_bytes >> 10));
@@ -737,7 +807,7 @@ void nl_tex_frame(void) {
 }
 
 void nl_tex_free(NL_TEX* t) {
-#ifdef __3DS__
+#if defined(__3DS__) || defined(__vita__)
     if (t->loaded && hash_ok[t - nl_tex] && t->bytes <= KEEP_ONE && kept_bytes + t->bytes <= KEEP_MOST && keep_freed()) {
         kept_freed[t - nl_tex] = 1;
         kept_bytes += t->bytes;
@@ -759,7 +829,7 @@ void nl_tex_free(NL_TEX* t) {
 /* when the board stops */
 void nl_tex_free_all(void) {
     int i;
-#ifdef __3DS__
+#if defined(__3DS__) || defined(__vita__)
     if (kept_back != 0) {
         host_log("textures: %lu freed ones loaded again from the same source (MVC2_TEX_KEEP_FREED)",
                  (unsigned long)kept_back);

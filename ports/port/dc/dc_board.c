@@ -15,7 +15,7 @@
 
 void gdFsFinish(void);
 
-#define DC_PROGRAM_ADDRESS 0x0C010000u
+#define DC_PROGRAM_ADDRESS (NAOMI_RAM_BASE + 0x00010000u)
 #define DC_PROGRAM_MAX 0x00400000
 
 int dc_init(const HOST_PROGRAM* program, const char* disc_path) {

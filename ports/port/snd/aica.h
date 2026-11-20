@@ -29,7 +29,7 @@ typedef struct {
     unsigned dsp_steps;
 } AICA_STATS;
 void aica_stats(AICA_STATS* s);
-#ifdef MVC2_PROF
+#if defined(MVC2_PROF) || defined(__vita__)
 enum { AICA_PERF_CHUNK, AICA_PERF_ARM_END, AICA_PERF_MIX_END, AICA_PERF_FIQ, AICA_PERF_FIQ_END };
 extern void (*aica_perf)(int at);   /* called at each of the mix's steps, when set */
 #endif

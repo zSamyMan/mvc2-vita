@@ -3,6 +3,9 @@
  * driver, the sound CPU runs until it answers, with no time passing; the game gets the same back with sound off.
  */
 
+#if defined(__ARM_NEON) && defined(__vita__)
+#include <arm_neon.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -247,7 +250,13 @@ int32_t nlsndInit(const void* driver, int32_t mode) {
     if (getenv("MVC2_ARMRATE")) {
         aica_set_cpu_rate(atoi(getenv("MVC2_ARMRATE")));
     }
+#ifdef __vita__
+    /* on unless MVC2_ARMJIT=0: kubridge's cache upkeep is safe there (vita_code.c's probe), the sound CPU 3.4 ms a
+       frame interpreted, 1.1 translated */
+    arm7_translate(getenv("MVC2_ARMJIT") == NULL || atoi(getenv("MVC2_ARMJIT")) != 0);
+#else
     arm7_translate(getenv("MVC2_ARMJIT") != NULL && atoi(getenv("MVC2_ARMJIT")) != 0);  /* off until its cache upkeep is safe on hardware */
+#endif
     arm7_translate2(getenv("MVC2_ARMJIT2") != NULL ? atoi(getenv("MVC2_ARMJIT2")) : 0);
     arm7_fast(getenv("MVC2_ARMFAST") != NULL && atoi(getenv("MVC2_ARMFAST")) != 0);
     arm7_small(getenv("MVC2_ARMSMALL") != NULL ? atoi(getenv("MVC2_ARMSMALL")) : 0);   /* 2: the commonest inline */
@@ -845,7 +854,14 @@ int snd_frame(const int16_t** out) {
         } else {
             memset(frame_buf, 0, n * 4);
         }
-        for (i = 0; i < n * 2; i++) {
+        i = 0;
+#if defined(__ARM_NEON) && defined(__vita__)
+        /* NEON: eight samples a step, added with saturation (the same clamp to 16 bits) */
+        for (; i + 8 <= n * 2; i += 8) {
+            vst1q_s16(frame_buf + i, vqaddq_s16(vld1q_s16(frame_buf + i), vld1q_s16(mix_buf + i)));
+        }
+#endif
+        for (; i < n * 2; i++) {
             int32_t v = frame_buf[i] + mix_buf[i];
             frame_buf[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
         }

@@ -13,6 +13,9 @@
 #endif
 
 #include "naomi_host.h"
+#ifdef __vita__
+#include "vita_sys.h"
+#endif
 
 #define CONFIG "mvc2.cfg"
 
@@ -57,7 +60,18 @@ static const char* beside_exe(const char* path, char* buf, size_t size) {
     if (path[0] == '/' || path[0] == '\\' || (path[0] != 0 && path[1] == ':')) {
         return path;
     }
-#ifdef __3DS__
+#ifdef __vita__
+    /* a device's path (ux0:, uma0:) is whole; the rest is in the data folder, as app0: can't be written */
+    {
+        size_t device = strcspn(path, ":/");
+        if (path[device] == ':') {
+            return path;
+        }
+    }
+    (void)base;
+    snprintf(buf, size, "%s%s", VITA_DATA_DIR, path);
+    return buf;
+#elif defined(__3DS__)
     (void)base;
     snprintf(buf, size, "%s", path);    /* the 3DS starts in its data folder, sdmc:/3ds/mvc2 */
     return buf;

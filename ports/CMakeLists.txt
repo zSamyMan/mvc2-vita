@@ -23,6 +23,36 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "the game stores addresses in 32 bits: build for a 32-bit target (MSYS2 mingw32, or 32-bit ARM Linux)")
 endif()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# the PS Vita (VitaSDK's toolchain file): main RAM at the SH-4's P1 mirror, 0x8C000000, where the Vita lets a
+# program have memory, so the game's C is built from a copy with its 0x0C... addresses moved there
+# (port/tools/vita_rewrite.py; rerun cmake after changing the decomp), and the Dreamcast version alone
+if(VITASDK)
+    set(VITA ON)
+    include("${VITASDK}/share/vita.cmake" REQUIRED)
+    set(VITA_DECOMP ${CMAKE_BINARY_DIR}/decomp)
+    execute_process(COMMAND ${Python3_EXECUTABLE} ${PORT}/tools/vita_rewrite.py ${GAME} ${VITA_DECOMP}
+                    RESULT_VARIABLE VITA_REWRITE)
+    if(NOT VITA_REWRITE EQUAL 0)
+        message(FATAL_ERROR "port/tools/vita_rewrite.py failed")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PORT}/tools/vita_rewrite.py)
+    set(GAME ${VITA_DECOMP})
+    set(POINTERS ${VITA_DECOMP})
+    set(MVC2_SDL3 OFF CACHE BOOL "" FORCE)
+    set(RAM_BASE_OPTION --ram-base=0x8C000000)
+    # the toolchain's linker script with 64 KB more before the data: vita-elf-create puts its own tables at the
+    # code segment's end, and fails when the data starts less than about 4 KB after it, which a build's size
+    # decides by chance
+    execute_process(COMMAND ${CMAKE_C_COMPILER} -nostdlib -Wl,--verbose OUTPUT_VARIABLE LD_VERBOSE ERROR_QUIET)
+    string(REGEX REPLACE "^.*\n=+\n(.*)\n=+\n.*$" "\\1" LD_SCRIPT "${LD_VERBOSE}")
+    string(REPLACE "DATA_SEGMENT_ALIGN (0x10000, 0x10000)" "ALIGN(0x10000) + 0x10000" LD_SCRIPT "${LD_SCRIPT}")
+    string(REPLACE ". = DATA_SEGMENT_RELRO_END (0, .);" "" LD_SCRIPT "${LD_SCRIPT}")
+    string(REPLACE ". = DATA_SEGMENT_END (.);" "" LD_SCRIPT "${LD_SCRIPT}")
+    if(NOT LD_SCRIPT MATCHES "ALIGN\\(0x10000\\) \\+ 0x10000")
+        message(FATAL_ERROR "could not make the Vita linker script")
+    endif()
+    file(WRITE ${CMAKE_BINARY_DIR}/vita.ld "${LD_SCRIPT}")
+endif()
 # no fused multiply-add: the same results on each CPU
 add_compile_options(-ffp-contract=off)
 # a fixed load address, so 0x0C000000 stays free for the game's RAM
@@ -54,7 +84,7 @@ endif()
 # keep SHC's (the 3DS front end, with libctru, keeps devkitARM's)
 set(HOST_ABI)
 set(RELOC_FLAGS)
-if(NINTENDO_3DS)
+if(NINTENDO_3DS OR VITA)
     set(HOST_ABI -fno-short-enums)
     set(RELOC_FLAGS -Wl,--no-enum-size-warning)
     list(APPEND GAME_OPTIONS ${HOST_ABI})
@@ -94,6 +124,7 @@ set(NAOMI_SOURCES
     ${PORT}/naomi/naomi_m1.c
     ${PORT}/naomi/nl_am.c
     ${PORT}/nl/nl_xmtr.c
+    ${PORT}/nl/nl_math.c
     ${PORT}/nl/nl_tex.c
     ${PORT}/nl/nl_lz.c
     ${PORT}/nl/nl_sprite.c
@@ -161,6 +192,9 @@ else()
     endif()
     if(WIN32)
         set(SYS_SOURCES ${PORT}/sys/coro_win32.c ${PORT}/sys/divzero_win32.c)
+    elseif(VITA)
+        # threads that take turns: the Vita's kernel kills a system call made on a stack it didn't give
+        set(SYS_SOURCES ${PORT}/sys/coro_vita.c ${PORT}/sys/divzero_arm.c)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
         set(SYS_SOURCES ${PORT}/sys/coro_arm.c ${PORT}/sys/divzero_arm.c)
     else()
@@ -168,6 +202,13 @@ else()
     endif()
     set(FRONT_SOURCES ${PORT}/sdl/main_sdl.c ${PORT}/sdl/start.c ${PORT}/sdl/input_sdl.c ${PORT}/sdl/menu_sdl.c
         ${PORT}/sdl/sdl_audio.c ${PORT}/sdl/test_mode.c)
+    if(VITA)
+        # the GPU back end on its render thread (MVC2_RENDERER=soft: rd_soft.c through SDL's renderer)
+        list(APPEND FRONT_SOURCES ${PORT}/vita/vita_sys.c ${PORT}/render/rd_vgl.c ${PORT}/vita/vita_code.c)
+        # the sound CPU translated to the A9's own ARM code (MVC2_ARMJIT / MVC2_ARMJIT2), code memory from kubridge
+        list(APPEND HOST_SOURCES ${PORT}/snd/arm7_jit.c ${PORT}/snd/arm7_jit2.c)
+        set_source_files_properties(${PORT}/snd/arm7.c PROPERTIES COMPILE_DEFINITIONS ARM7_JIT)
+    endif()
 endif()
 if(NINTENDO_3DS)
     list(APPEND FRONT_SOURCES ${PORT}/ctr/ctr_audio.c ${PORT}/ctr/ctr_code.c)    # the sound out and its translator's code memory
@@ -204,6 +245,14 @@ if(MVC2_SDL3 AND NOT NINTENDO_3DS)
     set(SDL_LIBS SDL3::SDL3)
     target_compile_definitions(mvc2_port PRIVATE RD_SDL3)
     target_link_libraries(mvc2_port PRIVATE SDL3::SDL3)
+elseif(VITA)
+    # VitaSDK's static SDL2 and the system libraries it calls (its sdl2.pc)
+    set(SDL_INCLUDE ${VITASDK}/arm-vita-eabi/include/SDL2)
+    set(SDL_LIBS SDL2 SceGxm_stub SceDisplay_stub SceCtrl_stub SceAppMgr_stub SceAppUtil_stub SceAudio_stub
+        SceAudioIn_stub SceSysmodule_stub SceIofilemgr_stub SceCommonDialog_stub SceTouch_stub SceHid_stub
+        SceMotion_stub ScePower_stub SceProcessmgr_stub kubridge_stub SceLibKernel_stub SceKernelThreadMgr_stub
+        SceKernelDmacMgr_stub pthread)
+    target_include_directories(mvc2_port PRIVATE ${SDL_INCLUDE})
 elseif(NOT NINTENDO_3DS)
     find_package(SDL2 REQUIRED)
     set(SDL_LIBS SDL2::SDL2main SDL2::SDL2)
@@ -243,7 +292,7 @@ function(mvc2_program NAME)
     add_custom_command(OUTPUT ${OUT}/host_data.c ${OUT}/host_stubs.c ${OUT}/host_defsyms.rsp ${OUT}/host_rename.txt
         COMMAND Python3::Interpreter ${PORT}/tools/gen_host.py ${GAME} ${CMAKE_NM} ${OUT}
                 ${CMAKE_BINARY_DIR}/CMakeFiles/${NAME}_game.dir ${HOST_DIRS} --program=${P_PROGRAM} --prefix=${NAME}
-                ${UNDERSCORE}
+                ${UNDERSCORE} ${RAM_BASE_OPTION}
         DEPENDS ${NAME}_game ${P_HOST} $<TARGET_OBJECTS:${NAME}_game> ${HOST_OBJECTS} ${PORT}/tools/gen_host.py
                 ${GAME}/symbols.txt ${GAME}/symbols_dc.txt ${GAME}/mvc2.sub ${GAME}/mvc2dc.sub
                 ${POINTERS}/pointers.tsv ${POINTERS}/pointers_dc.tsv
@@ -265,7 +314,9 @@ function(mvc2_program NAME)
     set_source_files_properties(${CMAKE_BINARY_DIR}/${NAME}.o PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 endfunction()
 
-mvc2_program(arc PROGRAM arcade SOURCES ${ARC_SOURCES} DEFINITIONS BUILD_DATE=20000225 HOST mvc2_port mvc2_lib)
+if(NOT VITA)
+    mvc2_program(arc PROGRAM arcade SOURCES ${ARC_SOURCES} DEFINITIONS BUILD_DATE=20000225 HOST mvc2_port mvc2_lib)
+endif()
 
 # the Dreamcast's (USA disc): the same modules with its switches, src/dc's in place of their namesakes and
 # its own beside them, but not its start-up (strt2.c) or Sega's library modules (src/dc/lib)
@@ -408,6 +459,37 @@ function(mvc2_executable TARGET)
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PORT}/ctr/cia/mvc2.rsf)
         endif()
         ctr_create_cia(${TARGET} "${TITLE}" "${DESCRIPTION}" ${CIA_DIR} ${PORT}/ctr/icon.png ${CIA_MODE})
+    elseif(VITA)
+        target_include_directories(${TARGET} PRIVATE ${SDL_INCLUDE} ${PORT}/vita)
+        target_compile_definitions(${TARGET} PRIVATE MVC2_VITAGL)
+        target_link_options(${TARGET} PRIVATE -Wl,-T,${CMAKE_BINARY_DIR}/vita.ld)
+        # vitaGL before SDL's stubs, SceGxm_stub after vitaGL (a stub archive only serves what comes before it)
+        target_link_libraries(${TARGET} PRIVATE vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub
+            SceGxm_stub SceDisplay_stub SceKernelDmacMgr_stub SceCommonDialog_stub SceAppMgr_stub stdc++
+            ${SDL_LIBS} SceCtrl_stub m)
+        target_link_options(${TARGET} PRIVATE ${RELOC_FLAGS}
+            -Wl,--wrap=__aeabi_idiv,--wrap=__aeabi_uidiv,--wrap=__aeabi_idivmod,--wrap=__aeabi_uidivmod)
+        # UNSAFE: kubridge's kernel calls map main RAM
+        vita_create_self(${TARGET}.self ${TARGET} UNSAFE)
+        set(VITA_TITLE_ID MVC200002)
+        set(VITA_ASSETS)
+        foreach(asset icon0.png pic0.png bg.png startup.png template.xml)
+            if(EXISTS ${PORT}/vita/sce_sys/${asset})
+                if(asset STREQUAL "icon0.png" OR asset STREQUAL "pic0.png")
+                    list(APPEND VITA_ASSETS FILE ${PORT}/vita/sce_sys/${asset} sce_sys/${asset})
+                else()
+                    list(APPEND VITA_ASSETS FILE ${PORT}/vita/sce_sys/${asset} sce_sys/livearea/contents/${asset})
+                endif()
+            endif()
+        endforeach()
+        # the shaders compiled on a console (every Vita's GPU the same), read at the start: none compiled in a game
+        if(EXISTS ${PORT}/vita/shaders/pack.bin)
+            list(APPEND VITA_ASSETS FILE ${PORT}/vita/shaders/pack.bin shaders/pack.bin)
+        endif()
+        # ATTRIBUTE2=12: the extended memory mode, for main RAM, the heap and the renderer's lists
+        set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
+        vita_create_vpk(${TARGET}.vpk ${VITA_TITLE_ID} ${TARGET}.self VERSION 01.00
+                        NAME "Marvel vs. Capcom 2" ${VITA_ASSETS})
     else()
         target_link_libraries(${TARGET} PRIVATE ${SDL_LIBS} m)
         if(MVC2_SDL3)
@@ -447,7 +529,9 @@ function(mvc2_executable TARGET)
 endfunction()
 
 # both programs, the arcade's unless the command line says --dc
-mvc2_executable(mvc2 arc dc)
+if(NOT VITA)
+    mvc2_executable(mvc2 arc dc)
+endif()
 # the Dreamcast alone, while its host layer is young
 if(NOT NINTENDO_3DS)
     mvc2_executable(mvc2dc dc)
@@ -469,10 +553,10 @@ if(WIN32)
                 PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
                 POST_EXCLUDE_REGEXES "[Ss][Yy][Ss][Tt][Ee][Mm]32" "[Ss][Yy][Ss][Ww][Oo][Ww]64"
             RUNTIME DESTINATION .)
-elseif(NOT NINTENDO_3DS)
+elseif(NOT NINTENDO_3DS AND NOT VITA)
     install(TARGETS mvc2 mvc2dc RUNTIME DESTINATION .)
 endif()
-if(NOT NINTENDO_3DS)
+if(NOT NINTENDO_3DS AND NOT VITA)
     install(FILES ${PORT}/dist/PLAYING.md DESTINATION .)
     install(CODE "if(NOT EXISTS \"\${CMAKE_INSTALL_PREFIX}/mvc2.cfg\")
         file(INSTALL \"${PORT}/dist/mvc2.cfg\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")

@@ -32,6 +32,9 @@
 
 #include "rd.h"
 #include "rd_list.h"
+#ifdef __vita__
+void host_log(const char* fmt, ...);
+#endif
 
 #if defined(__GNUC__)
 #define PIXEL_STEP static inline __attribute__((always_inline))
@@ -1043,6 +1046,10 @@ void rd_end_frame(uint32_t* frame, int pitch) {
     if (ntotal > maxsetups) {
         SETUP* p = realloc(setups, (size_t)ntotal * sizeof *p);
         if (p == NULL) {
+#ifdef __vita__
+            host_log("render: no memory for %d triangles' setups (%u KB)", ntotal,
+                     (unsigned)((size_t)ntotal * sizeof *p >> 10));
+#endif
             return;
         }
         setups = p;

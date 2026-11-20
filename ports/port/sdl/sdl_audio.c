@@ -161,6 +161,13 @@ static void queue(const int16_t* in, int n, double stretch) {
    only until the frame has taken a frame's time, so a frame never waits twice */
 static double backstop(double frames) {
     static Uint64 last;
+#ifdef __vita__
+    /* the Vita's frames are paced by the vertical blank: waiting here too, for a queue the device drains a little
+       slower, stacked a frame's wait on each and halved the frame rate. The stretch keeps the queue at its mark */
+    if (getenv("MVC2_FPS") != NULL && atof(getenv("MVC2_FPS")) == 0) {
+        return frames;
+    }
+#endif
     Uint64 freq = SDL_GetPerformanceFrequency(), now = SDL_GetPerformanceCounter();
     Uint64 until = last + (Uint64)(freq / 59.94);
     if (last != 0 && now < until && frames > TARGET + 2.5) {

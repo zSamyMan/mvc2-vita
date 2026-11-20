@@ -9,9 +9,27 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* mapped at its arcade address: the game keeps buffers there */
+/* mapped at its arcade address: the game keeps buffers there. The Vita has no memory for a program
+   there, so it maps it at the SH-4's P1 mirror, 0x8C000000 (and P2's, 0xAC000000, as an alias), and the
+   game's C and tables are built with their RAM addresses moved there (port/tools/vita_rewrite.py) */
+#ifdef __vita__
+#define NAOMI_RAM_BASE  0x8C000000u
+#else
 #define NAOMI_RAM_BASE  0x0C000000u
+#endif
 #define NAOMI_RAM_SIZE  0x02000000u
+
+/* an address the game handed over: on the Vita one in the 0x0C mirror (from a file it loaded) moved to the
+   mirror main RAM is mapped at; elsewhere as it is */
+#ifdef __vita__
+static inline void* host_ram_ptr(const void* p) {
+    uintptr_t a = (uintptr_t)p;
+    return (void*)(a - 0x0C000000u < NAOMI_RAM_SIZE ? a - 0x0C000000u + NAOMI_RAM_BASE : a);
+}
+void vita_relocate_file(void* data, size_t size);  /* port/vita/vita_sys.c: a model file's pointers */
+#else
+#define host_ram_ptr(p) ((void*)(p))
+#endif
 
 /* a word of the program's data that points at what the host defines (port/tools/gen_host.py) */
 typedef struct {
@@ -102,6 +120,7 @@ const char* dc_image_find(const char* disc_path);     /* a disc image's name the
 const char* dc_image_unpack(const char* disc_path, void (*progress)(uint32_t done, uint32_t total));
 long dc_gd_read_file(const char* name, void* buf, long max);  /* a whole file; its size, or -1 */
 const char* dc_gd_path(const char* name);   /* a file's path on the host */
+const uint8_t* dc_gd_head(const char* name, uint32_t* len);  /* Vita: a music file's first bytes, kept in memory */
 
 /* the 3DS's read-ahead of one file (ctr_stream.c) */
 int ctr_stream_open(const char* path, uint32_t most);

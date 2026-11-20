@@ -18,14 +18,18 @@
 #include "prof.h"
 #include "snd_drv.h"
 
+#if defined(MVC2_PROF) || defined(__vita__)  /* the Vita's MVC2_SNDPROF (vita_sys.c) times the mix's steps too */
+void (*aica_perf)(int at);
+#define PERF(at) do { if (aica_perf) aica_perf(at); } while (0)
+#endif
 #ifdef MVC2_PROF
 static int game_side;               /* aica_run_cpu: the game's thread runs the CPU, the sound's waiting */
 #define IO_COUNT() do { if (!game_side) PROF_COUNT(PZ_SND_IO, 1); } while (0)
-void (*aica_perf)(int at);
-#define PERF(at) do { if (aica_perf) aica_perf(at); } while (0)
 #else
 #define IO_COUNT() ((void)0)
+#ifndef __vita__
 #define PERF(at) ((void)0)
+#endif
 #endif
 
 #define CHUNK 256                   /* the most samples mixed at once */

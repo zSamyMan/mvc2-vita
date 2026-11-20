@@ -48,6 +48,13 @@ void host_log(const char* fmt, ...) {
         va_end(ap);
         return;
     }
+#elif defined(__vita__)
+    {
+        void vita_log_line(const char* fmt, va_list ap);    /* port/vita/vita_sys.c: mvc2.log and the TTY */
+        vita_log_line(fmt, ap);
+        va_end(ap);
+        return;
+    }
 #endif
     vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -109,6 +116,9 @@ int naomi_map_ram(void) {
 #elif defined(__3DS__)
     extern int ctr_ram_mapped;      /* mapped before libctru's heaps (port/ctr/main_3ds.c) */
     return ctr_ram_mapped;
+#elif defined(__vita__)
+    int vita_map_ram(void);         /* port/vita/vita_sys.c */
+    return vita_map_ram();
 #elif defined(__linux__)
     void* want = (void*)(uintptr_t)NAOMI_RAM_BASE;
     void* p = mmap(want, NAOMI_RAM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
