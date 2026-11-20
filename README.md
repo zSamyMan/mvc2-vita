@@ -13,7 +13,7 @@ Dreamcast disc, read at start-up.
 ## Where it comes from
 
 The game code under `src/` and `include/` is the decompilation of the NAOMI arcade and Dreamcast releases by
-Paul Connolly and its contributors (`mvc2-naomi-dc`), which rebuilds both programs byte for byte. This
+Giblet (`mvc2-naomi-dc`), which rebuilds both programs byte for byte. This
 repository keeps only what the Vita port needs from it, and does not aim to contribute back to it: the
 decompilation's own toolchain, tests and documentation live in that project.
 
