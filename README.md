@@ -17,12 +17,11 @@ Giblet (`mvc2-naomi-dc`), which rebuilds both programs byte for byte. This
 repository keeps only what the Vita port needs from it, and does not aim to contribute back to it: the
 decompilation's own toolchain, tests and documentation live in that project.
 
-## Playing
+## Installing and running
 
-1. A PS Vita or PS TV with HENkaku/Enso, taiHEN, [kubridge](https://github.com/bythos14/kubridge) and the
-   shader compiler (`libshacccg.suprx` in `ur0:data/`).
-2. Install `mvc2dc.vpk` with VitaShell.
-3. Put the USA disc's files (`1ST_READ.BIN` and the rest), or an image of the disc (`.chd`, `.gdi`, `.cue`,
+1. A PS Vita or PS TV with HENkaku, [kubridge](https://github.com/bythos14/kubridge) and [SharkF00D](https://github.com/OsirizX/ShaRKF00D).
+2. Download `mvc2dc.vpk` from the Releases page and install `mvc2dc.vpk` with VitaShell.
+3. Put the USA image of the disc (`.chd`, `.gdi`, `.cue`,
    or an `.iso` of track 3), in `ux0:data/mvc_2/disc/`. An image is unpacked into that folder at the first start.
 
 ## Building
