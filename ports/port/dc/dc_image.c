@@ -429,6 +429,8 @@ const char* dc_image_unpack(const char* dir, void (*progress)(uint32_t done, uin
         return fail("no disc image in %s", dir);
     }
     host_log("disc image: unpacking %s/%s", dir, image);
+    snprintf(path, sizeof path, "%s/_index.bin", dir);
+    remove(path);       /* dc_gd.c's listing of the folder, made again from the files unpacked now */
     snprintf(path, sizeof path, "%s/%s", dir, image);
     t.raw = malloc((size_t)CHUNK * 2352);
     if (t.raw == NULL) {

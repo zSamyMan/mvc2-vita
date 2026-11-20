@@ -626,6 +626,10 @@ typedef struct PLAYER_WORK {
 #define OBJ_MTX		0x4000	/* its own obj_mtx on top of base_mtx */
 #define OBJ_ENV		0x8000	/* drawn with a cheap environment map first */
 #define OBJ_FIT		0x10000	/* on the Dreamcast: made less tall on a screen that shows every line */
+/* the PS Vita port's: on a screen wider than 4:3 (ASPECT_RATIO=WIDE), drawn moved to its left or right side */
+#define OBJ_WIDE_EDGE	0x10000000	/* its parts past the 4:3's sides pushed out to the wide screen's (a bar's ends) */
+#define OBJ_WIDE_L	0x20000000
+#define OBJ_WIDE_R	0x40000000
 
 /* the drawing and animation part of a work, tile_top to cpu_ex_adrs, which an effect copies whole
    from its master */

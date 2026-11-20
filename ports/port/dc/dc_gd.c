@@ -563,43 +563,47 @@ const uint8_t* dc_gd_head(const char* name, uint32_t* len) {
     return NULL;
 }
 
-static void read_heads(void) {
-    int i, n = nlisted, got = 0;
-    uint64_t t0 = sceKernelGetProcessTimeWide();
-    for (i = 0; i < n && nheads < HEADS_MOST; i++) {
-        char path[1200];
-        FILE* f;
-        uint32_t want;
-        uint8_t* d;
-        if (strncmp(listed[i].name, "ADX", 3) != 0 || listed[i].size == 0) {
-            continue;
-        }
-        want = listed[i].size < HEAD_BYTES ? listed[i].size : HEAD_BYTES;
-        if ((d = malloc(want)) == NULL) {
-            break;
-        }
-        snprintf(path, sizeof path, "%s/%s", root, listed[i].name);
-        bg_wait();
-        if ((f = fopen(path, "rb")) == NULL) {
-            free(d);
-            continue;
-        }
-        setvbuf(f, NULL, _IONBF, 0);
-        if (bg_read(f, d, want)) {
-            snprintf(heads[nheads].name, sizeof heads[0].name, "%s", listed[i].name);
-            heads[nheads].data = d;
-            heads[nheads].len = want;
-            __sync_synchronize();
-            nheads++;
-            got++;
-        } else {
-            free(d);
-        }
-        fclose(f);
+/* one song's first HEAD_BYTES into memory, giving way to the game's reads; 1 when read */
+static int read_head(const char* name, uint32_t size) {
+    char path[1200];
+    FILE* f;
+    uint32_t want = size < HEAD_BYTES ? size : HEAD_BYTES;
+    uint8_t* d;
+    int ok;
+    if (nheads >= HEADS_MOST || size == 0 || (d = malloc(want)) == NULL) {
+        return 0;
     }
-    host_log("gd: the first %u KB of %d music files read in %.1f s", HEAD_BYTES >> 10, got,
-             (sceKernelGetProcessTimeWide() - t0) / 1e6);
+    snprintf(path, sizeof path, "%s/%s", root, name);
+    bg_wait();
+    if ((f = fopen(path, "rb")) == NULL) {
+        free(d);
+        return 0;
+    }
+    setvbuf(f, NULL, _IONBF, 0);
+    ok = bg_read(f, d, want);
+    fclose(f);
+    if (!ok) {
+        free(d);
+        return 0;
+    }
+    snprintf(heads[nheads].name, sizeof heads[0].name, "%s", name);
+    heads[nheads].data = d;
+    heads[nheads].len = want;
+    __sync_synchronize();
+    nheads++;
+    return 1;
 }
+
+/* the files in the order the game first asks for them (the attract's, then the arcade's first fight): read into
+   memory first. On a memory card that answers each request in 0.5 s or more, a file still on the card when the
+   game wants it held a frame up by a second or two; read in this order the cache is ahead of it */
+static const char* const use_order[] = {
+    "DM11POL.BIN", "DM11TEX.BIN", "DM09TEX.BIN", "DM09POL.BIN", "ADX_CAPL.BIN", "DM08TEX.BIN", "DM08POL.BIN",
+    "DM08CAB.BIN", "DM08CHR.BIN", "SE_SYUK.BIN", "DM07TEX.BIN", "ADX_OPEN.BIN", "DM07POL.BIN", "STG00TEX.BIN",
+    "EFKYPOL.BIN", "EFKYTEX.BIN", "STG00POL.BIN", "ADX_S000.BIN", "DM06POL.BIN", "DM06TEX.BIN", "ADX_RANK.BIN",
+    /* the start's: the game reads them itself as it starts, before the cache could, so they come after */
+    "AICADRV.BIN", "SE_COMN.BIN", "DM04TEX.BIN", "DM04POL.BIN", "FONT.BIN", "DEBUG.BIN", "VS4.BIN", "ERR_MES.BIN",
+};
 
 static int cache_rank(const char* n) {
     static const char* const first[] = { "DM", "S_", "SE", "EN", "2_", "S2", "S1", "AS" };
@@ -618,10 +622,91 @@ static int cache_rank(const char* n) {
     return 50;
 }
 
+/* the attract's four demos (s_play.c's demo_pl_tbl, the Dreamcast's): each one's six fighters, on stage d */
+static const uint8_t demo_fighters[4][6] = {
+    { 0x02, 0x00, 0x01, 0x04, 0x22, 0x05 }, { 0x15, 0x14, 0x13, 0x12, 0x10, 0x11 },
+    { 0x06, 0x16, 0x17, 0x0b, 0x0f, 0x0a }, { 0x07, 0x08, 0x09, 0x0c, 0x0e, 0x0d },
+};
+
+/* a file's place in the reading: its place in use_order; then each demo's fighters (their data, voices and win
+   poses) and stage, demo by demo, as the attract plays them; then the rest by cache_rank (a song's head with them) */
+static int read_rank(const char* n) {
+    int i, d;
+    unsigned id;
+    char kind[4];
+    for (i = 0; i < (int)(sizeof use_order / sizeof use_order[0]); i++) {
+        if (strcmp(n, use_order[i]) == 0) {
+            return i;
+        }
+    }
+    if (sscanf(n, "PL%2X_%3s", &id, kind) == 2) {
+        for (d = 0; d < 4; d++) {
+            for (i = 0; i < 6; i++) {
+                if (demo_fighters[d][i] == id) {
+                    return 40 + d * 20 + i * 2 + (strcmp(kind, "DAT") != 0);
+                }
+            }
+        }
+    }
+    if (sscanf(n, "STG%2X", &id) == 1 && id < 8) {
+        return 40 + (int)(id % 4) * 20 + 14 + (int)(id / 4);   /* demo d's stage is d, the next round of demos' d + 4 */
+    }
+    return 100 + cache_rank(n);
+}
+
 static int cache_cmp(const void* a, const void* b) {
     const char *x = ((const char*)a), *y = ((const char*)b);
-    int rx = cache_rank(x), ry = cache_rank(y);
+    int rx = read_rank(x), ry = read_rank(y);
     return rx != ry ? rx - ry : strcmp(x, y);
+}
+
+/* the disc folder's listing kept in one file (_index.bin: "MVC2IDX1", the count, then name and size of each): a
+   listing asks the card once a file, 18 to 36 s on a slow card before anything could be read; this, once */
+#define INDEX_NAME "_index.bin"
+static int index_load(void) {
+    char path[1200];
+    FILE* f;
+    char magic[8];
+    uint32_t n = 0, i;
+    snprintf(path, sizeof path, "%s/" INDEX_NAME, root);
+    if ((f = fopen(path, "rb")) == NULL) {
+        return 0;
+    }
+    if (fread(magic, 1, 8, f) != 8 || memcmp(magic, "MVC2IDX1", 8) != 0 || fread(&n, 4, 1, f) != 1 || n == 0 ||
+        n > LISTED_MOST) {
+        fclose(f);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (fread(listed[i].name, 1, sizeof listed[0].name, f) != sizeof listed[0].name ||
+            fread(&listed[i].size, 4, 1, f) != 1) {
+            fclose(f);
+            return 0;
+        }
+        listed[i].name[sizeof listed[0].name - 1] = 0;
+    }
+    fclose(f);
+    __sync_synchronize();
+    nlisted = (int)n;
+    return 1;
+}
+
+static void index_save(void) {
+    char path[1200];
+    FILE* f;
+    uint32_t n = (uint32_t)nlisted;
+    int i;
+    snprintf(path, sizeof path, "%s/" INDEX_NAME, root);
+    if ((f = fopen(path, "wb")) == NULL) {
+        return;
+    }
+    fwrite("MVC2IDX1", 1, 8, f);
+    fwrite(&n, 4, 1, f);
+    for (i = 0; i < nlisted; i++) {
+        fwrite(listed[i].name, 1, sizeof listed[0].name, f);
+        fwrite(&listed[i].size, 4, 1, f);
+    }
+    fclose(f);
 }
 
 /* the list (the directory's entries: each one can take milliseconds here, so not on the game's thread), the
@@ -629,37 +714,46 @@ static int cache_cmp(const void* a, const void* b) {
 static int cache_main(SceSize args, void* argp) {
     uint64_t t0 = sceKernelGetProcessTimeWide();
     const char* e = getenv("MVC2_GD_CACHE");
-    uint32_t budget = (e != NULL ? (uint32_t)atoi(e) : 96u) << 20, total = 0, done = 0;
+    uint32_t budget = (e != NULL ? (uint32_t)atoi(e) : 90u) << 20, total = 0, done = 0;
     static char names[CACHE_FILES][24];
     static uint32_t sizes[CACHE_FILES], offs[CACHE_FILES];
     SceIoDirent ent;
     SceUID dir, block = -1;
     int i, n = 0, got = 0;
     (void)args, (void)argp;
-    if ((dir = sceIoDopen(root)) < 0) {
-        host_log("gd: could not list %s (%08X): no files in memory", root, dir);
-        return 0;
-    }
-    while (sceIoDread(dir, &ent) > 0 && n < CACHE_FILES) {
-        if (!SCE_S_ISDIR(ent.d_stat.st_mode) && strlen(ent.d_name) < sizeof listed[0].name && nlisted < LISTED_MOST) {
-            snprintf(listed[nlisted].name, sizeof listed[0].name, "%s", ent.d_name);
-            listed[nlisted].size = (uint32_t)ent.d_stat.st_size;
-            __sync_synchronize();
-            nlisted++;
+    if (!index_load()) {
+        if ((dir = sceIoDopen(root)) < 0) {
+            host_log("gd: could not list %s (%08X): no files in memory", root, dir);
+            return 0;
         }
-        /* not the music (read ahead by dc_adx.c) nor the fighters' data (PLxx_DAT, read by am_load.c while the game
-           goes on); their voices, faces and win poses yes, read whole as a fighter is picked or speaks */
-        if (SCE_S_ISDIR(ent.d_stat.st_mode) || strncmp(ent.d_name, "ADX", 3) == 0 ||
-            (strncmp(ent.d_name, "PL", 2) == 0 && strstr(ent.d_name, "_DAT") != NULL) ||
-            strlen(ent.d_name) >= sizeof names[0] || ent.d_stat.st_size == 0 || ent.d_stat.st_size > (8u << 20)) {
+        while (sceIoDread(dir, &ent) > 0) {
+            if (!SCE_S_ISDIR(ent.d_stat.st_mode) && ent.d_name[0] != '_' && strlen(ent.d_name) < sizeof listed[0].name &&
+                nlisted < LISTED_MOST) {
+                snprintf(listed[nlisted].name, sizeof listed[0].name, "%s", ent.d_name);
+                listed[nlisted].size = (uint32_t)ent.d_stat.st_size;
+                __sync_synchronize();
+                nlisted++;
+            }
+        }
+        sceIoDclose(dir);
+        index_save();
+        host_log("gd: %d files listed in %.1f s, kept in %s", nlisted, (sceKernelGetProcessTimeWide() - t0) / 1e6,
+                 INDEX_NAME);
+    }
+    for (i = 0; i < nlisted && n < CACHE_FILES; i++) {
+        const char* name = listed[i].name;
+        /* not the music (read ahead by dc_adx.c: its head only, below) nor the fighters' data (PLxx_DAT, read by
+           am_load.c while the game goes on) but the attract's demos' (the game waited half a second for each on a slow
+           card); the voices, faces and win poses yes */
+        if (strncmp(name, "ADX", 3) == 0 ||
+            (strncmp(name, "PL", 2) == 0 && strstr(name, "_DAT") != NULL && read_rank(name) >= 100) ||
+            listed[i].size == 0 || listed[i].size > (8u << 20)) {
             continue;
         }
-        snprintf(cached[n].name, sizeof cached[0].name, "%s", ent.d_name);
-        cached[n].size = (uint32_t)ent.d_stat.st_size;
+        snprintf(cached[n].name, sizeof cached[0].name, "%s", name);
+        cached[n].size = listed[i].size;
         n++;
     }
-    sceIoDclose(dir);
-    read_heads();
     qsort(cached, (size_t)n, sizeof cached[0], cache_cmp);
     for (i = 0; i < n; i++) {
         if (total + cached[i].size > budget) {
@@ -689,23 +783,48 @@ static int cache_main(SceSize args, void* argp) {
     ncached = n;        /* the list shown to gdFsOpen, none ready yet */
     host_log("gd: reading %d files, %u KB, into memory, listed in %.1f s (MVC2_GD_CACHE)", n, (unsigned)(total >> 10),
              (sceKernelGetProcessTimeWide() - t0) / 1e6);
-    for (i = 0; i < n; i++) {
-        char path[1200];
-        FILE* f;
-        snprintf(path, sizeof path, "%s/%s", root, cached[i].name);
-        bg_wait();
-        f = fopen(path, "rb");
-        if (f == NULL) {
-            continue;
+    {
+        /* the songs' heads in among the files, by the same order (the opening's song before the next scene's
+           models, the rest after) */
+        static int song[HEADS_MOST];
+        int nsong = 0, k = 0, j, heads_got = 0;
+        for (j = 0; j < nlisted && nsong < HEADS_MOST; j++) {
+            if (strncmp(listed[j].name, "ADX", 3) == 0 && listed[j].size > 0) {
+                song[nsong++] = j;
+            }
         }
-        setvbuf(f, NULL, _IONBF, 0);
-        if (bg_read(f, cache_mem + cached[i].off, cached[i].size)) {
-            __sync_synchronize();
-            cached[i].ready = 1;
-            done += cached[i].size;
-            got++;
+        for (j = 1; j < nsong; j++) {   /* by rank (few: an insertion sort) */
+            int v = song[j], m = j;
+            while (m > 0 && read_rank(listed[song[m - 1]].name) > read_rank(listed[v].name)) {
+                song[m] = song[m - 1];
+                m--;
+            }
+            song[m] = v;
         }
-        fclose(f);
+        for (i = 0; i < n || k < nsong;) {
+            char path[1200];
+            FILE* f;
+            if (k < nsong && (i >= n || read_rank(listed[song[k]].name) <= read_rank(cached[i].name))) {
+                heads_got += read_head(listed[song[k]].name, listed[song[k]].size);
+                k++;
+                continue;
+            }
+            snprintf(path, sizeof path, "%s/%s", root, cached[i].name);
+            bg_wait();
+            f = fopen(path, "rb");
+            if (f != NULL) {
+                setvbuf(f, NULL, _IONBF, 0);
+                if (bg_read(f, cache_mem + cached[i].off, cached[i].size)) {
+                    __sync_synchronize();
+                    cached[i].ready = 1;
+                    done += cached[i].size;
+                    got++;
+                }
+                fclose(f);
+            }
+            i++;
+        }
+        host_log("gd: the first %u KB of %d music files read with them", HEAD_BYTES >> 10, heads_got);
     }
     (void)names, (void)sizes, (void)offs;
     host_log("gd: %d files, %u KB, read into memory in %.1f s (%.1f s of it giving way to the game's reads)", got,

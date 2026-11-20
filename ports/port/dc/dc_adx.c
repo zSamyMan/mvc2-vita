@@ -254,7 +254,9 @@ static int ahead_ready(const struct _adx_talk* p, uint32_t n) {
  * from there; only those not read yet (the song's first moment) are read here as before. A new song bumps the
  * generation: the reader leaves the old one at its next piece, and the buffer is reused once it has.
  */
-#define PRE_PIECE (64u << 10)
+/* a request of the card's each: on a card that takes 0.5 s for any request, 64 KB pieces (1.5 s of a song) only just
+   kept up; 512 KB ones are 8 times fewer */
+#define PRE_PIECE (512u << 10)
 #define PRE_ROOM (8u << 20)     /* the largest song (ADX_*.BIN) is under 6 MB: one buffer, never moved */
 static struct {
     SceUID thread, go, lock;

@@ -394,6 +394,9 @@ void headline_label_init( PLAYER_WORK *w )
 	w->scale = menu_one ;
 	w->rot[2] = DEG_ANG( label_rot_tbl[p->rot] ) ;
 	w->obj_flag = ( OBJ_ROT_Z | OBJ_TRNSL | OBJ_FADE ) | w->obj_flag ;
+	/* the headline's bar (pieces 2 and 3; 2 has the ring behind the title too): its ends out to a screen wider than
+	   4:3's sides (the PS Vita's ASPECT_RATIO=WIDE), the ring as it is */
+	if( w->type == 2 || w->type == 3 ) w->obj_flag |= OBJ_WIDE_EDGE ;
 	w->fade.trnsl = 1.0f ;
 	w->fade.r = p->r ;
 	w->fade.g = p->g ;
@@ -499,6 +502,9 @@ void headline_title_init( PLAYER_WORK *w )
 	w->scale = menu_one ;
 	w->rot[2] = DEG_ANG( label_rot_tbl[p->rot] ) ;
 	w->obj_flag = ( OBJ_ROT_Z | OBJ_TRNSL | OBJ_FADE ) | w->obj_flag ;
+	/* the headline's bar (pieces 2 and 3; 2 has the ring behind the title too): its ends out to a screen wider than
+	   4:3's sides (the PS Vita's ASPECT_RATIO=WIDE), the ring as it is */
+	if( w->type == 2 || w->type == 3 ) w->obj_flag |= OBJ_WIDE_EDGE ;
 	w->fade.trnsl = 1.0f ;
 	w->fade.r = p->r ;
 	w->fade.g = p->g ;

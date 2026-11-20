@@ -2338,6 +2338,11 @@ static void pack_read(const char* path, int mend) {
         pack_mem = mem;
     }
     sceIoClose(fd);
+    if (mend && mem != NULL && added == 0 && keep > 0 && !cut && !bad) {
+        /* every record already in the VPK's pack: the copy only cost the card a read at each start */
+        sceIoRemove(path);
+        host_log("vgl: %s holds only the VPK's shaders: removed", path);
+    }
     if ((cut || bad) && mend && mem != NULL) {
         /* the good records written again on their own, else every record added after a cut stays unread */
         SceUID w = sceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);

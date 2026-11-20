@@ -248,9 +248,24 @@ static inline __attribute__((always_inline)) void transform(const XFORM* g, cons
     }
 }
 
+/* OBJ_WIDE_EDGE's model (a bar that ran off the 4:3's sides): its vertices past them pushed out by what the wide
+   screen shows more, the rest (a ring on the bar, its middle) left as they are */
+static int wide_edge;
+
+void host_wide_edge(int on) {
+    wide_edge = on && host_wide_x != 0.0f;
+}
+
+static inline float edge_x(float x) {
+    return x < 0.0f ? x - host_wide_x : x > 640.0f ? x + host_wide_x : x;
+}
+
 static void screen(const OVTX* o, RD_VTX* d) {
     float rw = 1.0f / o->w;
     d->x = o->x * rw;
+    if (wide_edge) {
+        d->x = edge_x(d->x);
+    }
     d->y = o->y * rw;
     d->z = rw;
     d->u = o->u;
@@ -273,6 +288,9 @@ static FVTX with_colour(const GROUP* g, const OVTX* o) {
 static void screen_cut(const FVTX* o, RD_VTX* d) {
     float rw = 1.0f / o->w;
     d->x = o->x * rw;
+    if (wide_edge) {
+        d->x = edge_x(d->x);
+    }
     d->y = o->y * rw;
     d->z = rw;
     d->u = o->u;
@@ -445,6 +463,20 @@ float host_text_dx(float x0, float x1) {
         return 0.0f;
     }
     return mid < 320.0f - hud_dz ? -host_wide_x : mid > 320.0f + hud_dz ? host_wide_x : 0.0f;
+}
+
+/* a model the game marks (OBJ_WIDE_L, OBJ_WIDE_R: a screen's table or title) moved to one side of the wide screen */
+static float wide_dx;
+
+void host_wide_shift(int side) {
+    wide_dx = side * host_wide_x;
+}
+
+static void shift_x(float* to_screen, float dx) {
+    int i;
+    for (i = 0; i < 4; i++) {
+        to_screen[i * 4 + 1] += dx * to_screen[i * 4];
+    }
 }
 
 /* to_screen moved by the gauge's side: its x column takes dx times its w column, so every vertex lands dx further */
@@ -1178,6 +1210,9 @@ static __attribute__((section(".text.nlhot"))) void put(const int* obj, float tr
         if (hud_on) {
             hud_shift(obj, to_screen);
         }
+    }
+    if (wide_dx != 0.0f) {
+        shift_x(to_screen, wide_dx);
     }
     if (obj_log_frame(&logged)) {
         host_log("obj %p view %d trnsl %g", (const void*)obj, use_view, (double)trnsl);

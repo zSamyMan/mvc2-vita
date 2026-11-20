@@ -48,7 +48,7 @@ void rank_mark_set( int no, int a )
 		ew->scale.x = 1.0f ;
 		ew->scale.y = 1.0f ;
 		ew->scale.z = 1.0f ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_SCALE | OBJ_BRIGHT ;
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_SCALE | OBJ_BRIGHT  | OBJ_WIDE_R;
 		ew->timer0 = 0 ;
 		ew->timer1 = 30 ;
 		switch( no ){

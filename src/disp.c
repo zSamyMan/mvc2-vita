@@ -159,8 +159,14 @@ static void obj_disp_list( Uint8 list )
 /*==============================================================*/
 /*			Draw a model										*/
 /*==============================================================*/
+/* the host's: the models drawn until host_wide_shift( 0 ) moved to the wide screen's left ( -1 ) or right ( 1 ) */
+extern void host_wide_shift( int side ) ;
+extern void host_wide_edge( int on ) ;	/* the vertices past the 4:3's sides pushed out to the wide screen's */
+
 static void obj_disp( PLAYER_WORK *w, Uint8 list )
 {
+	if( w->obj_flag & ( OBJ_WIDE_L | OBJ_WIDE_R ) ) host_wide_shift( w->obj_flag & OBJ_WIDE_R ? 1 : -1 ) ;
+	if( w->obj_flag & OBJ_WIDE_EDGE ) host_wide_edge( 1 ) ;
 	nlPushMatrix( 0 ) ;
 	nlLoadMatrix( &w->obj_mtx ) ;
 	if( w->obj_flag & OBJ_SCALE ) nlSetScaleFactor( obj_scale_max( &w->scale ) ) ;
@@ -179,6 +185,8 @@ static void obj_disp( PLAYER_WORK *w, Uint8 list )
 		}
 	}
 	nlPopMatrix( 1 ) ;
+	if( w->obj_flag & ( OBJ_WIDE_L | OBJ_WIDE_R ) ) host_wide_shift( 0 ) ;
+	if( w->obj_flag & OBJ_WIDE_EDGE ) host_wide_edge( 0 ) ;
 }
 
 /*==============================================================*/

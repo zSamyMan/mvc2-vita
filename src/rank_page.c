@@ -65,7 +65,7 @@ void rank_page_set( int no, int a )
 		ew->rot[0] = ( int )( rank_page_rot_tbl[no].x * 65536.0f / 360.0f + 0.5f ) & 0xffff ;
 		ew->rot[1] = ( int )( rank_page_rot_tbl[no].y * 65536.0f / 360.0f + 0.5f ) & 0xffff ;
 		ew->rot[2] = ( int )( rank_page_rot_tbl[no].z * 65536.0f / 360.0f + 0.5f ) & 0xffff ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_BRIGHT ;
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_BRIGHT  | OBJ_WIDE_R;
 		ew->timer0 = 0 ;
 		ew->timer1 = 0 ;
 		if( no >= 4 ) return ;
