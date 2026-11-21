@@ -635,7 +635,11 @@ void entry_init( PLAYER_WORK *pl_w )
 {
 	pl_w->win_cnt = 0 ;
 	pl_w->win_max = 0 ;
+#ifdef HOST_PORT
+	{ extern int host_first_stage( void ) ; pl_w->stage_cnt = host_first_stage() ; }	/* the port's test hook, 0 unless set */
+#else
 	pl_w->stage_cnt = 0 ;
+#endif
 	pl_w->sel_speed = 1 ;
 	pl_w->old_score_hi = 0 ;
 	pl_w->old_score = 0 ;

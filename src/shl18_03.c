@@ -204,8 +204,9 @@ static int shl18_03_out_ck( PLAYER_WORK *ew )
 {
 	int ok = 1 ;
 
-	if( ( ew->disp_dir == 0 && scr_work.scr_left - ew->size_back * 1.6666666f > ew->pos.x ) ||
-		( ew->disp_dir != 0 && ew->pos.x > scr_work.scr_right + DOT_X( ew->size_back ) ) ) ok = 0 ;
+	/* a wider screen's edges (the PS Vita's ASPECT_RATIO=WIDE; the 4:3's otherwise): the row runs the whole screen */
+	if( ( ew->disp_dir == 0 && SCR_WIDE_LEFT - ew->size_back * 1.6666666f > ew->pos.x ) ||
+		( ew->disp_dir != 0 && ew->pos.x > SCR_WIDE_RIGHT + DOT_X( ew->size_back ) ) ) ok = 0 ;
 	return ok ;
 }
 

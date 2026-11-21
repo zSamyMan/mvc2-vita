@@ -1,6 +1,7 @@
 /* DM0C, OPTION's screen position page: its frame and lines, the corner marks, the numbers of the
    position and size, and the picture that shows where the screen sits. */
 #include "player.h"
+extern Float host_wide_scale( void ) ;	/* the host's: a model's width for a screen wider than 4:3 */
 #include "nl.h"
 #include "dm.h"
 
@@ -221,6 +222,7 @@ void adjust_screen_init( PLAYER_WORK *w )
 	w->pos.x = option_w.adjust_x / 10.0f ;
 	w->pos.y = -( option_w.adjust_y / 10.0f ) ;
 	w->scale.x = w->scale.y = adjust_size_tbl[option_w.adjust_size] ;
+	w->scale.x *= host_wide_scale() ;	/* the frame at a wider screen's edges (the PS Vita's ASPECT_RATIO=WIDE; 1 otherwise) */
 }
 
 /****************************************************************/
@@ -290,6 +292,7 @@ void adjust_screen_main( PLAYER_WORK *w )
 	w->pos.x = option_w.adjust_x / 10.0f ;
 	w->pos.y = -( option_w.adjust_y / 10.0f ) ;
 	w->scale.x = w->scale.y = adjust_size_tbl[option_w.adjust_size] ;
+	w->scale.x *= host_wide_scale() ;	/* the frame at a wider screen's edges (the PS Vita's ASPECT_RATIO=WIDE; 1 otherwise) */
 }
 
 /****************************************************************/

@@ -29,7 +29,7 @@ void sel_halo_set( PLAYER_WORK *pl_w, Uint8 flag )
 	ew->obj = obj_dm01->obj[175] ;
 	if( flag ) ew->work_func = sel_halo_speed_main ;
 	else ew->work_func = sel_halo_main ;
-	ew->obj_flag = OBJ_SCALE | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_SCALE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 	ew->scale.x = 1.0f ;
 	ew->scale.y = 1.0f ;
 	ew->scale.z = 1.0f ;

@@ -34,7 +34,8 @@ void ef05_tag_set( PLAYER_WORK *pl_w )
 	ew->scale.x = 1.0f ;
 	ew->scale.y = 1.0f ;
 	ew->scale.z = 1.0f ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Z | OBJ_SCALE | OBJ_BRIGHT ;
+	/* the strip with the name, to its corner of a screen wider than 4:3 (the PS Vita's ASPECT_RATIO=WIDE) */
+	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Z | OBJ_SCALE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;
 }
 
 static void ef05_tag_wait( PLAYER_WORK *ew );

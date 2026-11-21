@@ -298,8 +298,9 @@ void mes_puts( const MES_WORK *mw )
 /*			A line in the polygon font; "^" takes the next		*/
 /*			letter from the second half of the texture			*/
 /****************************************************************/
-/* the host's: how far a fight's line of text on the gauges' row moves with them on a screen wider than 4:3 */
-extern Float host_text_dx( Float x0, Float x1 ) ;
+/* the host's: how far a fight's line of text on the gauges' row moves with them on a screen wider than 4:3;
+   in_game: a game runs (not the title or the attract), whose PRESS START keeps the fight's place in every scene */
+extern Float host_text_dx( Float x0, Float x1, int in_game ) ;
 
 void mes_font_disp( const MES_WORK *mw )
 {
@@ -326,7 +327,7 @@ void mes_font_disp( const MES_WORK *mw )
 		Uint8 *e ;
 
 		for( e = s ; *e ; e ++ ) ;
-		x += host_text_dx( x, x + ( e - s ) * 0.75f * mf->size ) ;
+		x += host_text_dx( x, x + ( e - s ) * 0.75f * mf->size, Sys->play_mode == 96 ) ;
 	}
 	vt[0].x = x ;
 	vt[2].x = x ;

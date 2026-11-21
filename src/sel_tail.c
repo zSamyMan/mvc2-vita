@@ -51,7 +51,7 @@ void sel_nop( PLAYER_WORK *pl_w )
 		ew->rot[0] = 0xe001 ;
 		ew->rot[1] = 0 ;
 	}
-	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* with the assist box, to its side of a wider screen (WIDE) */
 	if( ( ew = work_get( 0, W_SET, LIST_END ) ) ){
 		ew->disp_flag = 1 ;
 		ew->master_w = pl_w->master_w ;
@@ -65,7 +65,7 @@ void sel_nop( PLAYER_WORK *pl_w )
 		ew->pos = sel_tail_pos_tbl[ew->type][ew->sub_type] ;
 		ew->pos.z += 0.1f ;
 		ew->rot[0] = 0xe001 ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_BRIGHT ;
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* with the assist box, to its side of a wider screen (WIDE) */
 	}
 #endif
 }

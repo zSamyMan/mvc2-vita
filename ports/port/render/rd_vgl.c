@@ -1371,13 +1371,22 @@ static int keys_room(int n) {
 static void order_fix(const RD_FRAME* f);
 
 /* triangles from..to-1 of the translucent list as pieces: a deep one cut, the rest as they are */
+/* the cuts' candidates one half of the list may look at in a frame (MVC2_CUT_MOST): past them its deep triangles are
+   drawn whole, sorted by their middles as the stages' are. A screen of effects (Abyss's last fall, a hyper's finish)
+   gave 3800 a frame on average and up to 10.8 ms of cutting, the frame over its 16.7 ms; the others look at a few
+   hundred */
+static unsigned cut_most;
+
 static void make_pieces(PCTX* x, const RD_FRAME* f, int from, int to) {
     int i;
+    if (cut_most == 0) {
+        cut_most = getenv("MVC2_CUT_MOST") != NULL && atoi(getenv("MVC2_CUT_MOST")) > 0 ? (unsigned)atoi(getenv("MVC2_CUT_MOST")) : 1500u;
+    }
     for (i = from; i < to; i++) {
         if (!tinfo[i].drawn) {
             continue;
         }
-        if (tinfo[i].deep && shallow_room) {
+        if (tinfo[i].deep && shallow_room && x->candidates < cut_most) {
             int before = x->n;
             cut_deep(x, f, i);
             x->cut += x->n - before > 1;

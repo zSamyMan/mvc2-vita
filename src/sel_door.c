@@ -38,7 +38,7 @@ void sel_door_set( PLAYER_WORK *pl_w )
 	ew->rot[0] = sel_door_rot_tbl[ew->type][0] ;
 	ew->rot[1] = sel_door_rot_tbl[ew->type][1] ;
 	ew->rot[2] = sel_door_rot_tbl[ew->type][2] ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 	sel_light_make( ew ) ;
 	sel_door_follow_set( ew, 0 ) ;
 	na_req( 76 + ew->type ) ;
@@ -64,7 +64,7 @@ void sel_door_speed_set( PLAYER_WORK *pl_w )
 	ew->rot[0] = sel_door_rot_tbl[ew->type][0] ;
 	ew->rot[1] = sel_door_rot_tbl[ew->type][1] ;
 	ew->rot[2] = sel_door_rot_tbl[ew->type][2] ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 	sel_door_follow_set( ew, 1 ) ;
 	sel_glow_make( ew ) ;
 	na_req( 76 + ew->type ) ;

@@ -41,7 +41,7 @@ void sel_mark_make( PLAYER_WORK *pl_w )
 		ew->rot[0] = 0xe001 ;
 		ew->rot[1] = 0 ;
 		ew->timer0 = ew->dir * 3 + 10 ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_TRNSL | OBJ_FADE | OBJ_BRIGHT ;
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_TRNSL | OBJ_FADE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 		ew->fade.trnsl = 1.0f ;
 		switch( i ){
 		case 4:

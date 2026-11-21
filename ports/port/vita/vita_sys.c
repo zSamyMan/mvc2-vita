@@ -446,7 +446,25 @@ int vita_debug = 1;
 static const char* const debug_vars[] = {
     "MVC2_OVERLAY", "MVC2_SHOT", "MVC2_SHOT_SOFT", "MVC2_DUMP", "MVC2_BURST", "MVC2_TRACE", "MVC2_GPUTIME",
     "MVC2_SNDPROF", "MVC2_TTY", "MVC2_CONTROL", "MVC2_TRACE_GD", "MVC2_SNDDBG", "MVC2_SNDLOG", "MVC2_FSX",
+    "MVC2_BOSS", "MVC2_TEST",
 };
+
+/* MVC2_TEST=bits (testing only): 1 the computer's players at 1 vital, 2 the human's hyper gauge kept full, 4 a note of
+   the computer's vital each second, 8 the human's vital kept full */
+int host_test_flags(void) {
+    static int f = -1;
+    if (f < 0) {
+        f = getenv("MVC2_TEST") != NULL ? atoi(getenv("MVC2_TEST")) : 0;
+    }
+    return f;
+}
+
+/* MVC2_BOSS=n (testing only): a side joining the arcade starts at its fight n (7: the last, Abyss) */
+int host_first_stage(void) {
+    const char* v = getenv("MVC2_BOSS");
+    int n = v != NULL ? atoi(v) : 0;
+    return n < 0 ? 0 : n > 7 ? 7 : n;
+}
 
 void vita_early_init(void) {
     SceKernelFreeMemorySizeInfo mem = { sizeof mem };

@@ -474,6 +474,8 @@ static struct {
     uint8_t heap;               /* in the heap's block (a fighter's data, PLxx_DAT), else the memory block's */
     uint8_t* mem;               /* its bytes, once the blocks are had */
     volatile int ready;
+    uint8_t late;               /* read after the rest, into the late block (late_main) */
+    uint64_t opened;            /* when the game last opened it (a late one is not dropped soon after) */
 } cached[CACHE_FILES];
 static uint8_t* cache_heap;
 /* a fighter or a stage the game just asked a file of: the cache reads its other files next (a fighter's sounds,
@@ -788,6 +790,132 @@ static int cache_read(int i, uint32_t* done) {
     return ok;
 }
 
+/*
+ * After the list is read: the files left out of it (over the budget: the last stage's, the bosses', a fighter's
+ * sounds) of a stage or a fighter the game has just opened a file of, read while the versus plays into a block of
+ * their own, so the fight's start does not wait for the card (the last stage's textures held it up 2 s). The oldest
+ * make room, unless the game opened them in the last LATE_KEEP_US. MVC2_GD_LATE=0: none; =MB: the block's size.
+ */
+#define LATE_FILE_MOST (2u << 20)
+#define LATE_KEEP_US 5000000ull
+static uint8_t* late_mem;
+static uint32_t late_size, late_pos;
+
+static int late_room(uint32_t sz, uint32_t* off) {
+    uint32_t at = late_pos + sz <= late_size ? late_pos : 0;
+    uint64_t now = sceKernelGetProcessTimeWide();
+    int i;
+    if (sz > late_size) {
+        return 0;
+    }
+    for (i = 0; i < ncached; i++) {     /* the late files in the way: none opened just now */
+        uint32_t o;
+        if (!cached[i].late || cached[i].mem == NULL) {
+            continue;
+        }
+        o = (uint32_t)(cached[i].mem - late_mem);
+        if (o < at + sz && at < o + cached[i].size && cached[i].ready && now - cached[i].opened < LATE_KEEP_US) {
+            return 0;
+        }
+    }
+    for (i = 0; i < ncached; i++) {
+        uint32_t o;
+        if (!cached[i].late || cached[i].mem == NULL) {
+            continue;
+        }
+        o = (uint32_t)(cached[i].mem - late_mem);
+        if (o < at + sz && at < o + cached[i].size) {
+            cached[i].ready = 0;        /* dropped: opened from the card again if asked for */
+            __sync_synchronize();
+            cached[i].name[0] = 0;
+        }
+    }
+    *off = at;
+    late_pos = (at + sz + 63u) & ~63u;
+    return 1;
+}
+
+static void late_main(void) {
+    const char* e = getenv("MVC2_GD_LATE");
+    unsigned seen = boost_seq;
+    if (e != NULL && atoi(e) <= 0) {
+        return;
+    }
+    late_size = (e != NULL ? (uint32_t)atoi(e) : 6u) << 20;
+    for (;;) {
+        char a[8], b[8], id[3];
+        int kind, j;
+        sceKernelDelayThread(20000);
+        if (boost_seq == seen) {
+            continue;
+        }
+        seen = boost_seq;
+        __sync_synchronize();
+        kind = boost_kind;
+        memcpy(id, boost_id, sizeof id);
+        if (kind == 2) {
+            snprintf(a, sizeof a, "STG%s", id);
+            snprintf(b, sizeof b, "STG%s", id);
+        } else {
+            snprintf(a, sizeof a, "PL%s_", id);
+            snprintf(b, sizeof b, "S_PL%s", id);
+        }
+        for (j = 0; j < nlisted && boost_seq == seen; j++) {
+            uint64_t t0;
+            uint32_t sz = listed[j].size, off, done = 0;
+            char path[1200];
+            FILE* f;
+            int i, have = 0;
+            if (sz == 0 || sz > LATE_FILE_MOST ||
+                (strncmp(listed[j].name, a, strlen(a)) != 0 && strncmp(listed[j].name, b, strlen(b)) != 0)) {
+                continue;
+            }
+            for (i = 0; i < ncached && !have; i++) {
+                have = strcmp(cached[i].name, listed[j].name) == 0;
+            }
+            if (have || ncached >= CACHE_FILES) {
+                continue;
+            }
+            if (late_mem == NULL) {
+                SceUID blk = sceKernelAllocMemBlock("gd_late", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, late_size, NULL);
+                if (blk < 0 || sceKernelGetMemBlockBase(blk, (void**)&late_mem) < 0) {
+                    host_log("gd: no block for the late files (%08X)", blk);
+                    return;
+                }
+            }
+            if (!late_room(sz, &off)) {
+                continue;
+            }
+            t0 = sceKernelGetProcessTimeWide();
+            snprintf(path, sizeof path, "%s/%s", root, listed[j].name);
+            bg_wait();
+            if ((f = fopen(path, "rb")) == NULL) {
+                continue;
+            }
+            setvbuf(f, NULL, _IONBF, 0);
+            i = ncached;
+            snprintf(cached[i].name, sizeof cached[0].name, "%s", listed[j].name);
+            cached[i].size = sz;
+            cached[i].off = off;
+            cached[i].heap = 0;
+            cached[i].late = 1;
+            cached[i].opened = 0;
+            cached[i].mem = late_mem + off;
+            cached[i].ready = 0;
+            if (bg_read(f, cached[i].mem, sz)) {
+                __sync_synchronize();
+                cached[i].ready = 1;
+                __sync_synchronize();
+                ncached = i + 1;
+                done = sz;
+            }
+            fclose(f);
+            host_log("gd: %s read ahead for the fight, %u KB in %.1f ms%s", listed[j].name, sz >> 10,
+                     (sceKernelGetProcessTimeWide() - t0) / 1000.0, done ? "" : " (failed)");
+        }
+    }
+}
+
 /* the list (the directory's entries: each one can take milliseconds here, so not on the game's thread), the
    memory, then the files; a file can be opened from memory once its ready is set */
 static int cache_main(SceSize args, void* argp) {
@@ -941,6 +1069,22 @@ static int cache_main(SceSize args, void* argp) {
     (void)names, (void)sizes, (void)offs;
     host_log("gd: %d files, %u KB, read into memory in %.1f s (%.1f s of it giving way to the game's reads)", got,
              (unsigned)(done >> 10), (sceKernelGetProcessTimeWide() - t0) / 1e6, bg_waited / 1e6);
+    {
+        /* what the budget left out, for the late reads */
+        int j, i, left = 0;
+        uint32_t kb = 0;
+        for (j = 0; j < nlisted; j++) {
+            int have = 0;
+            for (i = 0; i < ncached && !have; i++) {
+                have = strcmp(cached[i].name, listed[j].name) == 0;
+            }
+            if (!have && strncmp(listed[j].name, "ADX", 3) != 0) {
+                left++, kb += listed[j].size >> 10;
+            }
+        }
+        host_log("gd: %d files (%u KB, the music aside) left on the card, read ahead as the game comes to them", left, kb);
+    }
+    late_main();
     return 0;
 }
 
@@ -967,6 +1111,7 @@ static FILE* cache_open(const char* name, const uint8_t** mem) {
     for (i = 0; i < ncached; i++) {
         if (cached[i].ready && strcmp(cached[i].name, name) == 0) {
             *mem = cached[i].mem;
+            cached[i].opened = sceKernelGetProcessTimeWide();
             return fmemopen(cached[i].mem, cached[i].size, "rb");
         }
     }

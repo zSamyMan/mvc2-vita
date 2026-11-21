@@ -34,7 +34,7 @@ void sel_door_follow_set( PLAYER_WORK *pl_w, Uint8 flag )
 	ew->rot[0] = pl_w->rot[0] ;
 	ew->rot[1] = pl_w->rot[1] ;
 	ew->rot[2] = pl_w->rot[2] ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_Z | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_ROT_Z | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 	if( flag ) sel_obj_pos_add( ew, ew->type + 110, 0.1875f, 0.0f ) ;
 }
 
@@ -110,7 +110,7 @@ void sel_light_make( PLAYER_WORK *pl_w )
 		ew->rot[0] = 0x2000 ;
 		ew->rot[1] = 0 ;
 		ew->rot[2] = 0 ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_SCALE | OBJ_BRIGHT ;
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_SCALE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 		ew->scale.x = 1.0f ;
 		ew->scale.y = 0.01f ;
 		ew->scale.z = 1.0f ;
@@ -136,7 +136,7 @@ static void sel_light_set( PLAYER_WORK *pl_w )
 	else ew->obj = obj_dm01->obj[102] ;
 	ew->pos = sel_light_pos_tbl[ew->type][ew->sub_type] ;
 	ew->rot[0] = 0x2000 ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_SCALE | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_SCALE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 	ew->scale.x = 1.0f ;
 	ew->scale.y = 0.01f ;
 	ew->scale.z = 1.0f ;
@@ -179,7 +179,7 @@ void sel_glow_make( PLAYER_WORK *pl_w )
 		ew->rot[0] = 0x2000 ;
 		ew->rot[1] = 0 ;
 		ew->rot[2] = 0 ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_SCALE | OBJ_BRIGHT ;
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_SCALE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* to its side of a wider screen, with the cards (WIDE) */
 		ew->scale.x = 1.0f ;
 		ew->scale.y = 0.01f ;
 		ew->scale.z = 1.0f ;

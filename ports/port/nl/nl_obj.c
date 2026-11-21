@@ -472,9 +472,9 @@ void host_hud(int on) {
 
 /* the fight's lines of text on the gauges' row (the score, the wins, PRESS START): moved as the gauges are, by
    where the line's middle is, in a frame whose gauges were drawn; else 0 */
-float host_text_dx(float x0, float x1) {
+float host_text_dx(float x0, float x1, int in_game) {
     float mid = (x0 + x1) * 0.5f;
-    if (host_wide_x == 0.0f || hud_frame != host_frame() + 1) {
+    if (host_wide_x == 0.0f || (!in_game && hud_frame != host_frame() + 1)) {
         return 0.0f;
     }
     return mid < 320.0f - hud_dz ? -host_wide_x : mid > 320.0f + hud_dz ? host_wide_x : 0.0f;

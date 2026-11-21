@@ -98,6 +98,30 @@ void pl_work_move( void )
 	gauge_auto_add() ;
 	vital_drain_move() ;
 #endif
+#ifdef HOST_PORT
+	{	/* the port's test hooks (MVC2_TEST, testing builds only): 1 the computer's players at 1 vital, 2 the human's gauge full,
+		   4 a note of the computer's vital each second, 8 the human's vital kept full */
+		extern int host_test_flags( void ) ;
+		int f = host_test_flags(), side ;
+		PLAYER_WORK *w ;
+
+		if( f && !vs_sys_work.game_stop ){
+			for( side = 0 ; side < 2 ; side ++ ){
+				if( !( w = vs_sys_work.team_w[side][0] ) ) continue ;
+				if( !( Sys->play_side & ( 1 << side ) ) ){
+					if( ( f & 4 ) && !( vs_sys_work.vs_timer % 60 ) ){
+						extern void host_log( const char *f, ... ) ;
+						host_log( "test: side %d char %02x vital %d red %d vs_st %d", side, w->pl_type, w->vital_new, w->vital_red, vs_sys_work.vs_st ) ;
+					}
+					if( ( f & 1 ) && w->vital_new > 1 ) w->vital_new = 1 ;
+				} else {
+					if( f & 2 ) pl_gauge_add( w, 144 ) ;
+					if( ( f & 8 ) && w->vital_new > 0 && w->vital_new < 144 ) w->vital_new = 144 ;	/* the human's kept full */
+				}
+			}
+		}
+	}
+#endif
 }
 
 /****************************************************************/
