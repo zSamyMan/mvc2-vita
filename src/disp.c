@@ -161,6 +161,7 @@ static void obj_disp_list( Uint8 list )
 /*==============================================================*/
 /* the host's: the models drawn until host_wide_shift( 0 ) moved to the wide screen's left ( -1 ) or right ( 1 ) */
 extern void host_wide_shift( int side ) ;
+extern Float host_wide_side_x( int side ) ;	/* how far a wide_side effect is drawn from its place */
 extern void host_wide_edge( int on ) ;	/* the vertices past the 4:3's sides pushed out to the wide screen's */
 
 static void obj_disp( PLAYER_WORK *w, Uint8 list )
@@ -543,6 +544,7 @@ static void ef_disp( PLAYER_WORK *w )
 	prio = w->prio ;
 	nlScreenPoint( w->pos.x, w->pos.y, w->pos.z, &sx, &sy, &sz ) ;
 	w->disp_x = sx ;
+	if( w->wide_side ) w->disp_x += host_wide_side_x( w->wide_side ) ;
 	w->disp_y = sy ;
 	w->disp_z = prio_z[prio] + scr_work.eye[1].z * 0.1f ;
 	w->disp_zm_x = DOT_X( w->scale.x ) ;

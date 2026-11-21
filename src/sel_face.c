@@ -34,7 +34,7 @@ void sel_face_set( PLAYER_WORK *pl_w )
 	ew->rot[0] = 0 ;
 	ew->rot[1] = 0 ;
 	ew->rot[2] = 0 ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_Y | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_ROT_Y | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* with its card, to its side of a wider screen (WIDE) */
 	if( sel_w.pick_flag[pl_w->type] & ( 1 << pl_w->sub_type ) ){
 		ew->routine_0 = 6 ;
 		tex_req_flag = 1 ;

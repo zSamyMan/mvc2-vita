@@ -67,6 +67,8 @@ static PLAYER_WORK *shl37_01_part_set( PLAYER_WORK *ef_w, Uint8 type, Uint8 no )
 		ew->pl_type = ef_w->pl_type ;
 		ew->type = type ;
 		ew->sub_type = no ;
+		/* the body's three parts (type 1) drawn with it, from a wider screen's edge */
+		if( type == 1 ) ew->wide_side = !ef_w->disp_dir ? 1 : -1 ;
 	}
 	return ew ;
 }
@@ -160,6 +162,7 @@ static void shl37_01_edge_set( PLAYER_WORK *ew, PLAYER_WORK *pl_w )
 
 	if( !ew->disp_dir ) lw->y = scr_work.scr_right ;
 	else lw->y = scr_work.scr_left ;
+	ew->wide_side = !ew->disp_dir ? 1 : -1 ;	/* drawn from a wider screen's edge (its place the same) */
 	if( lw->x > DOT_X( 128.0f ) ) lw->x = 213 ;
 }
 
@@ -1013,6 +1016,7 @@ static void shl37_01_8_keep( PLAYER_WORK *ew, PLAYER_WORK *pl_w )
 	pl_char_move( ew ) ;
 	if( !ew->sub_type ) ew->pos.x = scr_work.scr_right ;
 	else ew->pos.x = scr_work.scr_left ;
+	ew->wide_side = !ew->sub_type ? 1 : -1 ;	/* at a wider screen's edge */
 	ew->pos.y = scr_work.scr_top + -DOT_Y( 48.0f ) ;
 }
 

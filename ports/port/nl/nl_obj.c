@@ -252,11 +252,26 @@ static inline __attribute__((always_inline)) void transform(const XFORM* g, cons
    screen shows more, the rest (a ring on the bar, its middle) left as they are */
 static int wide_edge;
 
+static unsigned edge_pushed, edge_seen;
+static int edge_log = -2;
+
 void host_wide_edge(int on) {
+    if (edge_log == -2) {
+        edge_log = getenv("MVC2_EDGELOG") != NULL ? atoi(getenv("MVC2_EDGELOG")) : -1;
+    }
+    static int logged;
+    if (!on && wide_edge && edge_log >= 0 && host_frame() >= (unsigned)edge_log && logged++ < 40) {
+        host_log("edge: frame %u: %u vertices, %u pushed", host_frame(), edge_seen, edge_pushed);
+    }
+    edge_pushed = edge_seen = 0;
     wide_edge = on && host_wide_x != 0.0f;
 }
 
 static inline float edge_x(float x) {
+    edge_seen++;
+    if (x < 0.0f || x > 640.0f) {
+        edge_pushed++;
+    }
     return x < 0.0f ? x - host_wide_x : x > 640.0f ? x + host_wide_x : x;
 }
 
@@ -465,11 +480,20 @@ float host_text_dx(float x0, float x1) {
     return mid < 320.0f - hud_dz ? -host_wide_x : mid > 320.0f + hud_dz ? host_wide_x : 0.0f;
 }
 
+/* a wide_side effect's distance from its place, and the screen's extra width past a side (ASPECT_RATIO=WIDE) */
+float host_wide_side_x(int side) {
+    return side * host_wide_x;
+}
+
 /* a model the game marks (OBJ_WIDE_L, OBJ_WIDE_R: a screen's table or title) moved to one side of the wide screen */
 static float wide_dx;
 
 void host_wide_shift(int side) {
-    wide_dx = side * host_wide_x;
+    static int off = -1;
+    if (off < 0) {
+        off = getenv("MVC2_NOWIDESHIFT") != NULL && atoi(getenv("MVC2_NOWIDESHIFT")) != 0;   /* a test's */
+    }
+    wide_dx = off ? 0.0f : side * host_wide_x;
 }
 
 static void shift_x(float* to_screen, float dx) {
@@ -1161,7 +1185,8 @@ static void draw(const int* obj, const float* model, const float* toscreen, floa
         g.xf.face_one = g.xf.face[0] == 1.0f && g.xf.face[1] == 1.0f && g.xf.face[2] == 1.0f && g.xf.face[3] == 1.0f;
         g.xf.face_argb = nl_float_argb(g.xf.face[0], g.xf.face[1], g.xf.face[2], g.xf.face[3]);
         GROUP_ADD(PZ_NLG_PRE, t0, GROUP_NOW());
-        if (rd_gpu_tl && gpu_group(p, &g)) {
+        /* OBJ_WIDE_EDGE moves its vertices one by one, on the CPU's way only (a few small bars) */
+        if (rd_gpu_tl && !wide_edge && gpu_group(p, &g)) {
             p = end;
             continue;
         }

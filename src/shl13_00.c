@@ -505,6 +505,7 @@ static void ef_paretonnre_init( PLAYER_WORK *ew )
 	ew->pos.y = ew->master_w->pos.y ;
 	ew->pos.z = ew->master_w->pos.z ;
 	ew->pos.x = ew->disp_dir ? scr_work.scr_left + -400.0f : scr_work.scr_right + 400.0f ;
+	ew->wide_side = ew->disp_dir ? -1 : 1 ;	/* drawn from a wider screen's edge (its place the same) */
 	ew->pos.y += 240.0f ;
 	ew->prio = 14 ;
 	ew->acc.x = 0.0f ;
@@ -521,6 +522,7 @@ static void ef_paretonnre_init( PLAYER_WORK *ew )
 static void ef_paretonnre_atck_init( PLAYER_WORK *ew )
 {
 	ew->disp_flag = 1 ;
+	ew->wide_side = ew->ef_w->wide_side ;	/* with the ship */
 	ew->disp_dir = ew->ef_w->disp_dir ;
 	ew->pos.z = ew->ef_w->pos.x ;
 	ew->pos.y = ew->ef_w->pos.y ;
@@ -573,6 +575,7 @@ static void ef_paretonnre_gun_init( PLAYER_WORK *ew )
 	Float ofs ;
 
 	ew->disp_flag = 1 ;
+	ew->wide_side = ew->ef_w->wide_side ;	/* with the ship */
 	ew->disp_dir = ew->ef_w->disp_dir ;
 	ew->pos.x = ew->ef_w->pos.x ;
 	ew->pos.y = ew->ef_w->pos.y ;
@@ -601,6 +604,7 @@ static void ef_paretonnre_fire_init( PLAYER_WORK *ew )
 	Float ofs ;
 
 	ew->disp_flag = 1 ;
+	ew->wide_side = ew->ef_w->wide_side ;	/* with the ship */
 	ew->disp_dir = ew->ef_w->disp_dir ;
 	ew->pos.x = ew->ef_w->pos.x ;
 	ew->pos.y = ew->ef_w->pos.y ;

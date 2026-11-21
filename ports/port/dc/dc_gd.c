@@ -360,6 +360,7 @@ static void keep_close_all(void) {
 
 /* the disc's files on the memory card: each open and read timed, and a frame whose took more than 20 ms said in the
    log (MVC2_TRACE_GD=1: every one) */
+static SceUID vreader = 0, cache_thread;    /* the reader's and the cache's threads (named in the trace) */
 static int trace = -1;
 static unsigned gd_frame, gd_reads, gd_opens;
 static char gd_names[64];      /* the files opened in the frame, the first few */
@@ -397,7 +398,9 @@ static void gd_account(const char* what, uint64_t t0, size_t bytes, int open) {
         gd_bytes += bytes;
     }
     if (trace) {
-        host_log("gd %s %u KB in %.1f ms (frame %u)", what, (unsigned)(bytes >> 10), us / 1000.0, host_frame());
+        SceUID me = sceKernelGetThreadId();
+        host_log("gd %s %u KB in %.1f ms (frame %u, %s)", what, (unsigned)(bytes >> 10), us / 1000.0, host_frame(),
+                 me == vreader ? "reader" : me == cache_thread ? "cache" : "game");
     }
 }
 
@@ -406,7 +409,7 @@ static void gd_account(const char* what, uint64_t t0, size_t bytes, int open) {
 /* the game's requested reads (gdFsReqRd32: am_load.c's, the fighters' data) done by a thread on core 2, the handle
    READ until it is done, so that the game keeps its frames going as it would on the console's drive */
 #include <psp2/kernel/threadmgr.h>
-static SceUID vreader = 0, vreq;
+static SceUID vreq;
 static GDFS volatile vjob_gd;
 static volatile Sint32 vjob_nsct;
 static void* volatile vjob_buf;
@@ -441,8 +444,16 @@ static int vreader_start(void) {
 }
 
 static void async_wait(GDFS gd) {
+    uint64_t t0 = 0;
     while (vjob_busy && vjob_gd == gd) {
+        if (t0 == 0) {
+            t0 = sceKernelGetProcessTimeWide();
+        }
         sceKernelDelayThread(500);
+    }
+    if (t0 != 0 && sceKernelGetProcessTimeWide() - t0 > 20000) {
+        host_log("gd: the game waited %.1f ms for the reader's read of %s (frame %u)",
+                 (sceKernelGetProcessTimeWide() - t0) / 1000.0, gd->vname[0] ? gd->vname : "a file", host_frame());
     }
 }
 
@@ -460,12 +471,35 @@ static void async_wait(GDFS gd) {
 static struct {
     char name[24];
     uint32_t off, size;
+    uint8_t heap;               /* in the heap's block (a fighter's data, PLxx_DAT), else the memory block's */
+    uint8_t* mem;               /* its bytes, once the blocks are had */
     volatile int ready;
 } cached[CACHE_FILES];
+static uint8_t* cache_heap;
+/* a fighter or a stage the game just asked a file of: the cache reads its other files next (a fighter's sounds,
+   voices and face, a stage's textures), which the versus loads one after another; boost_kind 1 a fighter (boost_id
+   its id, "0C"), 2 a stage ("01") */
+static char boost_id[3];
+static volatile int boost_kind;
+static volatile unsigned boost_seq;
+
+static void cache_boost(const char* name) {
+    int kind = 0;
+    if (strncmp(name, "PL", 2) == 0 && name[2] && name[3] && name[4] == '_') {
+        kind = 1, boost_id[0] = name[2], boost_id[1] = name[3];
+    } else if (strncmp(name, "STG", 3) == 0 && name[3] && name[4]) {
+        kind = 2, boost_id[0] = name[3], boost_id[1] = name[4];
+    }
+    if (kind) {
+        boost_id[2] = 0;
+        boost_kind = kind;
+        __sync_synchronize();
+        boost_seq++;
+    }
+}     /* the fighters' data: the game's heap, half of it idle (58 of 114 MB at most) */
 static int ncached;
 static uint8_t* cache_mem;
 static uint32_t cache_size;
-static SceUID cache_thread;
 
 /* every file the listing saw, with its size: an open of one not in memory needs no card access then (an open
    takes 20 to 150 ms on the memory card, the game's thread waiting in gdFsOpen): the file is opened by the
@@ -601,6 +635,10 @@ static const char* const use_order[] = {
     "DM11POL.BIN", "DM11TEX.BIN", "DM09TEX.BIN", "DM09POL.BIN", "ADX_CAPL.BIN", "DM08TEX.BIN", "DM08POL.BIN",
     "DM08CAB.BIN", "DM08CHR.BIN", "SE_SYUK.BIN", "DM07TEX.BIN", "ADX_OPEN.BIN", "DM07POL.BIN", "STG00TEX.BIN",
     "EFKYPOL.BIN", "EFKYTEX.BIN", "STG00POL.BIN", "ADX_S000.BIN", "DM06POL.BIN", "DM06TEX.BIN", "ADX_RANK.BIN",
+    /* the menus' and the select's, as a game starts from the title (the game read each on its own thread: two to
+       six seconds held up on a slow card entering the menu and the select) */
+    "DM0CPOL.BIN", "DM0CTEX.BIN", "SELTEX.BIN", "ADX_MENU.BIN", "DM01POL.BIN", "DM0FPOL.BIN", "DM0FTEX.BIN",
+    "DM01TEX.BIN", "SELVMU.BIN", "DM02TEX.BIN", "DM02POL.BIN", "DM00TEX.BIN", "DM00POL.BIN", "ADX_SELC.BIN",
     /* the start's: the game reads them itself as it starts, before the cache could, so they come after */
     "AICADRV.BIN", "SE_COMN.BIN", "DM04TEX.BIN", "DM04POL.BIN", "FONT.BIN", "DEBUG.BIN", "VS4.BIN", "ERR_MES.BIN",
 };
@@ -639,19 +677,39 @@ static int read_rank(const char* n) {
             return i;
         }
     }
+    /* demo 0's set at 100, then every fighter's data (120), the songs' heads (130), demos 1 to 3 (200 on), the rest */
     if (sscanf(n, "PL%2X_%3s", &id, kind) == 2) {
         for (d = 0; d < 4; d++) {
             for (i = 0; i < 6; i++) {
                 if (demo_fighters[d][i] == id) {
-                    return 40 + d * 20 + i * 2 + (strcmp(kind, "DAT") != 0);
+                    return (d ? 200 + (d - 1) * 20 : 100) + i * 2 + (strcmp(kind, "DAT") != 0);
                 }
             }
         }
+        if (strcmp(kind, "DAT") == 0) {
+            return 120;     /* any fighter's data: the select shows them, the versus loads them */
+        }
+        if (strcmp(kind, "VOI") == 0) {
+            return 125;     /* and voices, which the versus loads with them */
+        }
+    }
+    if (sscanf(n, "S_PL%2X", &id) == 1) {   /* a fighter's sounds, one of six places (S_PL02A...): with the fighter */
+        for (d = 0; d < 4; d++) {
+            for (i = 0; i < 6; i++) {
+                if (demo_fighters[d][i] == id) {
+                    return (d ? 200 + (d - 1) * 20 : 100) + 12 + (i & 1);
+                }
+            }
+        }
+        return 125;
     }
     if (sscanf(n, "STG%2X", &id) == 1 && id < 8) {
-        return 40 + (int)(id % 4) * 20 + 14 + (int)(id / 4);   /* demo d's stage is d, the next round of demos' d + 4 */
+        return (id % 4 ? 200 + (int)(id % 4 - 1) * 20 : 100) + 14 + (int)(id / 4);
     }
-    return 100 + cache_rank(n);
+    if (strncmp(n, "ADX", 3) == 0) {
+        return 130;         /* the songs' heads: a song's start read on the game's thread without one */
+    }
+    return 400 + cache_rank(n);
 }
 
 static int cache_cmp(const void* a, const void* b) {
@@ -709,6 +767,27 @@ static void index_save(void) {
     fclose(f);
 }
 
+/* one file of the list into its memory, giving way to the game's reads; 1 when read */
+static int cache_read(int i, uint32_t* done) {
+    char path[1200];
+    FILE* f;
+    int ok = 0;
+    snprintf(path, sizeof path, "%s/%s", root, cached[i].name);
+    bg_wait();
+    if ((f = fopen(path, "rb")) == NULL) {
+        return 0;
+    }
+    setvbuf(f, NULL, _IONBF, 0);
+    if (bg_read(f, cached[i].mem, cached[i].size)) {
+        __sync_synchronize();
+        cached[i].ready = 1;
+        *done += cached[i].size;
+        ok = 1;
+    }
+    fclose(f);
+    return ok;
+}
+
 /* the list (the directory's entries: each one can take milliseconds here, so not on the game's thread), the
    memory, then the files; a file can be opened from memory once its ready is set */
 static int cache_main(SceSize args, void* argp) {
@@ -742,12 +821,10 @@ static int cache_main(SceSize args, void* argp) {
     }
     for (i = 0; i < nlisted && n < CACHE_FILES; i++) {
         const char* name = listed[i].name;
-        /* not the music (read ahead by dc_adx.c: its head only, below) nor the fighters' data (PLxx_DAT, read by
-           am_load.c while the game goes on) but the attract's demos' (the game waited half a second for each on a slow
-           card); the voices, faces and win poses yes */
-        if (strncmp(name, "ADX", 3) == 0 ||
-            (strncmp(name, "PL", 2) == 0 && strstr(name, "_DAT") != NULL && read_rank(name) >= 100) ||
-            listed[i].size == 0 || listed[i].size > (8u << 20)) {
+        /* not the music (read ahead by dc_adx.c: its head only, below); every fighter's data (PLxx_DAT: the select
+           and the versus waited half a second to a second for each on a slow card), the demos' in the memory block,
+           the others in the heap */
+        if (strncmp(name, "ADX", 3) == 0 || listed[i].size == 0 || listed[i].size > (8u << 20)) {
             continue;
         }
         snprintf(cached[n].name, sizeof cached[0].name, "%s", name);
@@ -755,28 +832,55 @@ static int cache_main(SceSize args, void* argp) {
         n++;
     }
     qsort(cached, (size_t)n, sizeof cached[0], cache_cmp);
-    for (i = 0; i < n; i++) {
-        if (total + cached[i].size > budget) {
-            n = i;      /* the rest, by rank the last wanted, not kept */
-            break;
+    {
+        /* the fighters' data outside the demos in the heap, the rest in a memory block of what the system has, by
+           rank: what doesn't fit (the last wanted) left out */
+        uint32_t heap_total = 0, heap_most = 40u << 20;
+        int k = 0, j;
+        for (;;) {
+            total = heap_total = 0;
+            for (j = k = 0; j < n; j++) {
+                uint32_t sz = (cached[j].size + 63u) & ~63u;
+                int heap = strncmp(cached[j].name, "PL", 2) == 0 && strstr(cached[j].name, "_DAT") != NULL &&
+                           read_rank(cached[j].name) == 120;
+                if (heap ? heap_total + sz > heap_most : total + sz > budget) {
+                    continue;
+                }
+                cached[j].heap = (uint8_t)heap;
+                cached[j].off = heap ? heap_total : total;
+                *(heap ? &heap_total : &total) += sz;
+                if (j != k) {
+                    cached[k] = cached[j];
+                }
+                k++;
+            }
+            n = k;
+            block = total > 0 ? sceKernelAllocMemBlock("gd_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
+                                                      (total + 0xFFFFFu) & ~0xFFFFFu, NULL) : -1;
+            if (block >= 0 || total == 0 || budget < (8u << 20)) {
+                break;
+            }
+            budget = budget / 4 * 3;    /* not that much: a quarter less */
         }
-        cached[i].off = total;
-        total += (cached[i].size + 63u) & ~63u;
-    }
-    /* as much of it as there is memory for */
-    while (total > 0) {
-        block = sceKernelAllocMemBlock("gd_cache", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, (total + 0xFFFFFu) & ~0xFFFFFu, NULL);
-        if (block >= 0) {
-            break;
+        if (block < 0 || sceKernelGetMemBlockBase(block, (void**)&cache_mem) < 0) {
+            host_log("gd: no memory to keep the disc's files in (%08X)", block);
+            return 0;
         }
-        while (n > 0 && cached[n - 1].off + cached[n - 1].size > total * 3 / 4) {
-            n--;
+        if (heap_total > 0 && (cache_heap = host_try_malloc(heap_total)) == NULL) {
+            host_log("gd: no room in the heap for the fighters' data (%u KB): read from the card", heap_total >> 10);
         }
-        total = n > 0 ? cached[n - 1].off + cached[n - 1].size : 0;
-    }
-    if (block < 0 || sceKernelGetMemBlockBase(block, (void**)&cache_mem) < 0) {
-        host_log("gd: no memory to keep the disc's files in (%08X)", block);
-        return 0;
+        for (j = k = 0; j < n; j++) {
+            if (cached[j].heap && cache_heap == NULL) {
+                continue;
+            }
+            cached[j].mem = (cached[j].heap ? cache_heap : cache_mem) + cached[j].off;
+            if (j != k) {
+                cached[k] = cached[j];
+            }
+            k++;
+        }
+        n = k;
+        host_log("gd: %u KB of the fighters' data in the heap", cache_heap != NULL ? heap_total >> 10 : 0);
     }
     cache_size = total;
     __sync_synchronize();
@@ -788,6 +892,7 @@ static int cache_main(SceSize args, void* argp) {
            models, the rest after) */
         static int song[HEADS_MOST];
         int nsong = 0, k = 0, j, heads_got = 0;
+        unsigned boost_done = boost_seq;
         for (j = 0; j < nlisted && nsong < HEADS_MOST; j++) {
             if (strncmp(listed[j].name, "ADX", 3) == 0 && listed[j].size > 0) {
                 song[nsong++] = j;
@@ -802,25 +907,32 @@ static int cache_main(SceSize args, void* argp) {
             song[m] = v;
         }
         for (i = 0; i < n || k < nsong;) {
-            char path[1200];
-            FILE* f;
             if (k < nsong && (i >= n || read_rank(listed[song[k]].name) <= read_rank(cached[i].name))) {
                 heads_got += read_head(listed[song[k]].name, listed[song[k]].size);
                 k++;
                 continue;
             }
-            snprintf(path, sizeof path, "%s/%s", root, cached[i].name);
-            bg_wait();
-            f = fopen(path, "rb");
-            if (f != NULL) {
-                setvbuf(f, NULL, _IONBF, 0);
-                if (bg_read(f, cache_mem + cached[i].off, cached[i].size)) {
-                    __sync_synchronize();
-                    cached[i].ready = 1;
-                    done += cached[i].size;
-                    got++;
+            if (boost_seq != boost_done) {
+                /* the fighter the game asked for: its files still on the card first */
+                char a[8], b[8];
+                int j;
+                boost_done = boost_seq;
+                if (boost_kind == 2) {
+                    snprintf(a, sizeof a, "STG%s", boost_id);
+                    snprintf(b, sizeof b, "STG%s", boost_id);
+                } else {
+                    snprintf(a, sizeof a, "PL%s_", boost_id);
+                    snprintf(b, sizeof b, "S_PL%s", boost_id);
                 }
-                fclose(f);
+                for (j = i; j < n; j++) {
+                    if (!cached[j].ready && (strncmp(cached[j].name, a, strlen(a)) == 0 ||
+                                             strncmp(cached[j].name, b, strlen(b)) == 0)) {
+                        got += cache_read(j, &done);
+                    }
+                }
+            }
+            if (!cached[i].ready) {
+                got += cache_read(i, &done);
             }
             i++;
         }
@@ -854,8 +966,8 @@ static FILE* cache_open(const char* name, const uint8_t** mem) {
     int i;
     for (i = 0; i < ncached; i++) {
         if (cached[i].ready && strcmp(cached[i].name, name) == 0) {
-            *mem = cache_mem + cached[i].off;
-            return fmemopen(cache_mem + cached[i].off, cached[i].size, "rb");
+            *mem = cached[i].mem;
+            return fmemopen(cached[i].mem, cached[i].size, "rb");
         }
     }
     return NULL;
@@ -866,6 +978,7 @@ static FILE* cache_open(const char* name, const uint8_t** mem) {
 #define async_wait(gd) ((void)0)
 #endif
 
+static void cache_boost(const char* name);
 static FILE* open_file(const char* name) {
     char path[1200];
     FILE* f;
@@ -874,6 +987,7 @@ static FILE* open_file(const char* name) {
 #endif
     snprintf(path, sizeof path, "%s/%s", root, name);
 #ifdef __vita__
+    cache_boost(name);
     fg_begin();
 #endif
     f = fopen(path, "rb");
@@ -1040,6 +1154,50 @@ Sint32 gdFsGetFileSize(GDFS gd, Sint32* fsize) {
     return 1;
 }
 
+/* a file's close off the game's thread: on a slow card a close is a request of its own (a second, the game held
+   up at a fight's start); the reader's own closes are done at once, the others by a thread of their own */
+#define CLOSE_MOST 16
+static FILE* volatile close_ring[CLOSE_MOST];
+static volatile unsigned close_head, close_tail;
+static SceUID closer = 0, close_sema;
+
+static int closer_main(SceSize args, void* argp) {
+    (void)args, (void)argp;
+    for (;;) {
+        sceKernelWaitSema(close_sema, 1, NULL);
+        while (close_tail != close_head) {
+            FILE* f = close_ring[close_tail % CLOSE_MOST];
+            __sync_synchronize();
+            close_tail++;
+            bg_wait();
+            fclose(f);
+        }
+    }
+    return 0;
+}
+
+static void later_close(FILE* f) {
+    if (sceKernelGetThreadId() == vreader) {
+        fclose(f);
+        return;
+    }
+    if (closer == 0) {
+        close_sema = sceKernelCreateSema("gd_close", 0, 0, CLOSE_MOST, NULL);
+        closer = sceKernelCreateThread("gd_closer", closer_main, 190, 16 * 1024, 0, 0x00040000, NULL);
+        if (closer < 0 || sceKernelStartThread(closer, 0, NULL) < 0) {
+            closer = -1;
+        }
+    }
+    if (closer < 0 || close_head - close_tail >= CLOSE_MOST) {
+        fclose(f);      /* no thread, or its ring full: here */
+        return;
+    }
+    close_ring[close_head % CLOSE_MOST] = f;
+    __sync_synchronize();
+    close_head++;
+    sceKernelSignalSema(close_sema, 1);
+}
+
 static void read_sectors(GDFS gd, Sint32 nsct, void* buf) {
     size_t want = (size_t)nsct * GDD_SCT_SIZE, got = 0;
     PROF_START(t1);
@@ -1097,6 +1255,15 @@ static void read_sectors(GDFS gd, Sint32 nsct, void* buf) {
     }
 #endif
     gd->pos += (long)want;
+#ifdef __vita__
+    /* a file opened for its read and now read to its end closed here, on the thread that read it: the game's close
+       was a request of the card's of its own on the game's thread (half a second held up on a slow card, each time
+       a versus screen's read was done); opened again if it is read again */
+    if (gd->vname[0] && gd->mem == NULL && gd->f != LAZY && gd->f != NULL && gd->pos >= gd->size) {
+        later_close(gd->f);
+        gd->f = LAZY;
+    }
+#endif
     gd->stat = GDD_STAT_COMPLETE;
     PROF_STOP(PZ_GD_READ, t1);
 }

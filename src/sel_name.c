@@ -45,7 +45,8 @@ PLAYER_WORK *sel_name_set( PLAYER_WORK *pl_w, Uint8 flag )
 	}
 	if( sel_w.join_flag == 3 ) ew->pos = sel_name_pos_tbl[pl_w->pl_index][0] ;
 	else ew->pos = sel_name_pos_tbl[pl_w->pl_index][sel_w.join_flag] ;
-	ew->obj_flag = OBJ_POS | OBJ_BRIGHT ;
+	/* the plate to its side of a screen wider than 4:3, its strip's end out of sight (the PS Vita's WIDE) */
+	ew->obj_flag = OBJ_POS | OBJ_BRIGHT | ( pl_w->pl_index ? OBJ_WIDE_R : OBJ_WIDE_L ) ;
 	ew->work3 = sel_w.join_flag ;
 	if( flag ) ew->work_func = sel_dummy_1 ;
 	else ew->work_func = sel_name_main ;

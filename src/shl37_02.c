@@ -107,6 +107,7 @@ static void shl37_02_edge_set( PLAYER_WORK *ew, PLAYER_WORK *pl_w )
 
 	if( !ew->disp_dir ) lw->y = scr_work.scr_right ;
 	else lw->y = scr_work.scr_left ;
+	ew->wide_side = !ew->disp_dir ? 1 : -1 ;	/* drawn from a wider screen's edge (its place the same) */
 	if( lw->x > 600.0f ) lw->x = 600 ;
 }
 

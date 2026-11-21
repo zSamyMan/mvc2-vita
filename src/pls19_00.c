@@ -317,6 +317,7 @@ static void pls19_00_edge_l( PLAYER_WORK *ew, PLAYER_WORK *pl_w )
 	ew->scale.y = 0.8f ;
 	ew->alpha = 0.75f ;
 	ew->pos.x = scr_work.scr_left + -DOT_X( 64.0f ) ;
+	ew->wide_side = -1 ;	/* at a wider screen's edge */
 	ew->pos.y = pl_w->ground_y + 0.0f ;
 	ef_char_move( ew ) ;
 }
@@ -337,6 +338,7 @@ static void pls19_00_edge_r( PLAYER_WORK *ew, PLAYER_WORK *pl_w )
 	ew->scale.y = 0.8f ;
 	ew->alpha = 0.75f ;
 	ew->pos.x = scr_work.scr_right + DOT_X( 32.0f ) ;
+	ew->wide_side = 1 ;	/* at a wider screen's edge */
 	ew->pos.y = pl_w->ground_y + 0.0f ;
 	ef_char_move( ew ) ;
 }

@@ -118,7 +118,8 @@ static void ef05_cur_set( PLAYER_WORK *pl_w, Uint8 flag )
 	ew->rot[0] = ef05_cur_rot_tbl[ew->type][0] ;
 	ew->rot[1] = ef05_cur_rot_tbl[ew->type][1] ;
 	ew->rot[2] = ef05_cur_rot_tbl[ew->type][2] ;
-	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_SCALE | OBJ_BRIGHT ;
+	/* the side's card, to its side of a screen wider than 4:3 (the PS Vita's ASPECT_RATIO=WIDE) */
+	ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_SCALE | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;
 	ew->scale.x = 0.1f ;
 	ew->scale.y = 1.0f ;
 	ew->scale.z = 1.0f ;

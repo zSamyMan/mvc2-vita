@@ -3,6 +3,7 @@
 #include "player.h"
 #include "dm.h"
 
+extern Float host_wide_scale( void ) ;	/* the host's: a model's width for a screen wider than 4:3 */
 void pause_bg_move( PLAYER_WORK *w ) ;
 
 void pause_bg_set( void )
@@ -17,6 +18,12 @@ void pause_bg_set( void )
 	w->pos.y = 0.0f ;
 	w->pos.z = 0.0f ;
 	w->obj_flag = OBJ_POS | OBJ_BRIGHT ;
+	if( host_wide_scale() > 1.0f ){	/* the PS Vita's ASPECT_RATIO=WIDE only: wider, to the screen's sides */
+		w->obj_flag |= OBJ_SCALE ;
+		w->scale.x = host_wide_scale() ;
+		w->scale.y = 1.0f ;
+		w->scale.z = 1.0f ;
+	}
 	w->work2 = 0 ;
 	obj_uv_clear( w->obj ) ;
 }

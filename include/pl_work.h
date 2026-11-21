@@ -62,7 +62,10 @@ typedef struct PLAYER_WORK {
 	Uint8	unk_2c[0x30 - 0x2c];
 	Sint8	col_cnt;	/* 030: the palette lines the character uses */
 	Sint8	sub_prio;	/* 031: the order among works of the same prio, lowest drawn first */
-	Uint8	unk_32[2];
+	Sint8	wide_side;	/* 032: the PS Vita port's: an effect drawn moved to the left (-1) or right (1) side of a screen wider
+				   than 4:3 (ASPECT_RATIO=WIDE), its place in the game the same (a hyper's piece that comes from the
+				   screen's edge); 0 as the game had it. Outside CHAR_PART (0dc-19c), which effects copy from players */
+	Uint8	unk_33;
 	VEC3	pos;			/* 034 */
 	Sint32	rot[3];	/* 040: the turns about x, y and z, 16-bit angles; rot[2] is in the screen's plane */
 	Sint16	rot_ofs_x;	/* 04c: the centre the work turns about, across (rot_ofs_y is the height) */
@@ -626,6 +629,11 @@ typedef struct PLAYER_WORK {
 #define OBJ_MTX		0x4000	/* its own obj_mtx on top of base_mtx */
 #define OBJ_ENV		0x8000	/* drawn with a cheap environment map first */
 #define OBJ_FIT		0x10000	/* on the Dreamcast: made less tall on a screen that shows every line */
+/* the PS Vita port's: how much more of the stage a screen wider than 4:3 shows past each side (0 on 4:3), for an
+   effect that leaves at the screen's edge: the edges it leaves at, as wide as the screen is */
+extern Float host_wide_side_x( int side ) ;
+#define SCR_WIDE_LEFT	( scr_work.scr_left + host_wide_side_x( -1 ) )
+#define SCR_WIDE_RIGHT	( scr_work.scr_right + host_wide_side_x( 1 ) )
 /* the PS Vita port's: on a screen wider than 4:3 (ASPECT_RATIO=WIDE), drawn moved to its left or right side */
 #define OBJ_WIDE_EDGE	0x10000000	/* its parts past the 4:3's sides pushed out to the wide screen's (a bar's ends) */
 #define OBJ_WIDE_L	0x20000000

@@ -16,6 +16,7 @@ extern int obj_scale_max() ;	/* handed the VEC3 itself */
 #define OBJ_SCALE_MAX( v )	obj_scale_max( v )
 #endif
 
+extern void host_wide_edge( int on ) ;	/* the host's */
 void pause_win_move( PLAYER_WORK *w ) ;
 void pause_cursor_move( PLAYER_WORK *w ) ;
 
@@ -109,6 +110,7 @@ void pause_obj_disp( PLAYER_WORK *w )
 	if( !( p = PART_LIST( w ) ) ) return ;
 	scr_2d_matrix_set() ;
 	nlPushMatrix( NULL ) ;
+	host_wide_edge( 1 ) ;	/* the window's back and bar out to a wider screen's sides (the PS Vita's WIDE only) */
 	while( p->kind >= 0 ){
 		if( p->kind ){
 			nlUnitMatrix() ;
@@ -122,5 +124,6 @@ void pause_obj_disp( PLAYER_WORK *w )
 		}
 		p ++ ;
 	}
+	host_wide_edge( 0 ) ;
 	nlPopMatrix( 1 ) ;
 }

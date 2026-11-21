@@ -137,8 +137,9 @@ static int shl19_03_scr_ck( PLAYER_WORK *ew )
 {
 	int ok = 1 ;
 
-	if( !ew->disp_dir && scr_work.scr_left - ew->size_back * 1.6666666f > ew->pos.x ) ok = 0 ;
-	else if( ew->disp_dir && ew->pos.x > scr_work.scr_right + DOT_X( ew->size_back ) ) ok = 0 ;
+	/* gone past a wider screen's edge (no one to hit out there: the game the same) */
+	if( !ew->disp_dir && SCR_WIDE_LEFT - ew->size_back * 1.6666666f > ew->pos.x ) ok = 0 ;
+	else if( ew->disp_dir && ew->pos.x > SCR_WIDE_RIGHT + DOT_X( ew->size_back ) ) ok = 0 ;
 	return ok ;
 }
 

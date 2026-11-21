@@ -23,7 +23,7 @@ void sel_pic_set( PLAYER_WORK *pl_w )
 	ew->pos.x = 0.0f ;
 	ew->pos.y = 0.0f ;
 	ew->pos.z = 1.0f ;
-	ew->obj_flag = OBJ_POS | OBJ_BRIGHT ;
+	ew->obj_flag = OBJ_POS | OBJ_BRIGHT | ( ew->type ? OBJ_WIDE_R : OBJ_WIDE_L ) ;	/* with its card, to its side of a wider screen (WIDE) */
 }
 
 /* which model of the file goes with each side's three personal places */

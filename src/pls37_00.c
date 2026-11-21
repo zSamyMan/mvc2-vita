@@ -606,6 +606,7 @@ static void pls37_00_edge15( PLAYER_WORK *ew, PLAYER_WORK *pl_w )
 
 	if( !ew->disp_dir ) p->edge = scr_work.scr_right ;
 	else p->edge = scr_work.scr_left ;
+	ew->wide_side = !ew->disp_dir ? 1 : -1 ;	/* drawn from a wider screen's edge (its place the same) */
 	if( p->dist > DOT_X( 352.0f ) ) p->dist = 586 ;
 }
 

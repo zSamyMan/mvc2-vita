@@ -54,7 +54,8 @@ void rank_frame_set( int no )
 		ew->rot[1] = ( int )( rank_frame_rot.y * 65536.0f / 360.0f + 0.5f ) & 0xffff ;
 		ew->rot[2] = ( int )( rank_frame_rot.z * 65536.0f / 360.0f + 0.5f ) & 0xffff ;
 		ew->scale = rank_frame_scale ;
-		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_SCALE | OBJ_FADE | OBJ_BRIGHT ;
+		/* the top team's pictures, to the left of a screen wider than 4:3, clear of the table (the PS Vita's WIDE) */
+		ew->obj_flag = OBJ_POS | OBJ_ROT_X | OBJ_ROT_Y | OBJ_ROT_Z | OBJ_SCALE | OBJ_FADE | OBJ_BRIGHT | OBJ_WIDE_L ;
 		ew->fade.r = 1.0f ;
 		ew->fade.g = 1.0f ;
 		ew->fade.b = 1.0f ;
