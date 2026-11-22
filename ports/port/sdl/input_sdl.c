@@ -7,6 +7,9 @@
 #include <string.h>
 
 #include "sdl_front.h"
+#ifdef __vita__
+#include "vita_debug_menu.h"
+#endif
 
 #include "naomi_host.h"
 #include "naomi_input.h"
@@ -293,4 +296,11 @@ void input_read(HOST_INPUT* in) {
     }
     in->coin = coin && !coin_held;
     coin_held = coin;
+#ifdef __vita__
+    /* the debug menu (DEBUG_OPTIONS=1): L + DOWN + SELECT; while it is open the game gets no buttons */
+    if (dbg_menu_poll(dbg_menu_raw())) {
+        in->player[0] = in->player[1] = 0;
+        in->coin = 0;
+    }
+#endif
 }

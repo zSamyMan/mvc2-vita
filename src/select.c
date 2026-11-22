@@ -552,6 +552,9 @@ static int sel_stage_move( PLAYER_WORK *pl_w )
 			tex_req_flag = 1 ;
 			tex_req_no = 29 ;
 		}
+#ifdef HOST_PORT
+		{ extern void port_dbg_stage_apply( void ) ; port_dbg_stage_apply() ; }	/* the debug menu's stage, if set */
+#endif
 		return 1 ;
 	}
 	return 0 ;

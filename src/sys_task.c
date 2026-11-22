@@ -207,6 +207,11 @@ void Texture_Init( void )
 /****************************************************************/
 void System_Main( void )
 {
+#ifdef HOST_PORT
+	extern void port_dbg_frame( void ) ;
+
+	port_dbg_frame() ;	/* the PS Vita port's debug menu's request, if any (port_debug.c) */
+#endif
 	if( !Sys->task_stop ) sys_task() ;
 	Sys->task_stop = 0 ;
 	col_send() ;

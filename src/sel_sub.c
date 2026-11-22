@@ -191,6 +191,18 @@ void name_pic_set( int side, int no )
 	dst = ( Uint16 * )( side * 0x20000 + 0x0c720000 ) ;
 	lz_unpack16( src, dst ) ;
 }
+#ifdef HOST_PORT
+/* the PS Vita's: a name picture into a buffer of the port's (the intro's extra name tiles on a wider screen) */
+void name_pic_unpack( int no, Uint16 *dst )
+{
+	Sint32 *tbl ;
+	int n = no ;
+
+	if( no >= 27 ) n -= 3 ;
+	tbl = NAME_PIC_FILE ;
+	lz_unpack16( ( Sint16 * )( tbl[n] + ( Uint8 * )tbl ), dst ) ;
+}
+#endif
 #endif
 
 /****************************************************************/

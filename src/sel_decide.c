@@ -93,6 +93,9 @@ void stage_decide( void )
 #else
 	stage_no_set() ;
 #endif
+#ifdef HOST_PORT
+	{ extern void port_dbg_stage_apply( void ) ; port_dbg_stage_apply() ; }	/* the debug menu's stage, if set */
+#endif
 }
 
 /****************************************************************/

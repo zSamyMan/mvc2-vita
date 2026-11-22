@@ -207,7 +207,8 @@ else()
         ${PORT}/sdl/sdl_audio.c ${PORT}/sdl/test_mode.c)
     if(VITA)
         # the GPU back end on its render thread (MVC2_RENDERER=soft: rd_soft.c through SDL's renderer)
-        list(APPEND FRONT_SOURCES ${PORT}/vita/vita_sys.c ${PORT}/render/rd_vgl.c ${PORT}/vita/vita_code.c)
+        list(APPEND FRONT_SOURCES ${PORT}/vita/vita_sys.c ${PORT}/render/rd_vgl.c ${PORT}/vita/vita_code.c
+            ${PORT}/vita/vita_debug_menu.c)
         # the sound CPU translated to the A9's own ARM code (MVC2_ARMJIT / MVC2_ARMJIT2), code memory from kubridge
         list(APPEND HOST_SOURCES ${PORT}/snd/arm7_jit.c ${PORT}/snd/arm7_jit2.c)
         set_source_files_properties(${PORT}/snd/arm7.c PROPERTIES COMPILE_DEFINITIONS ARM7_JIT)

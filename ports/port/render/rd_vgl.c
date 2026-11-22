@@ -358,6 +358,7 @@ static struct {
 } ov;
 
 void menu_text(uint32_t* buf, int w, int h, int x, int y, const char* s, uint32_t color, int scale);
+#include "vita_debug_menu.h"
 
 static void overlay_update(void) {
     char line[32];
@@ -409,6 +410,53 @@ static void overlay_update(void) {
     cur.tex = overlay_tex;
     memset(&ov, 0, sizeof ov);
     ov.start = t;
+}
+
+/* the debug menu's (vita_debug_menu.c) switch over the overlay */
+void rd_vgl_overlay_toggle(void) {
+    overlay_on = !overlay_on;
+}
+
+int rd_vgl_overlay_shown(void) {
+    return overlay_on;
+}
+
+/* the debug menu's panel: its lines drawn into a texture each frame it is open, shown in the middle at 1.5 times */
+#define DM_W 304
+#define DM_H 172
+static GLuint dmenu_tex;
+static uint32_t dmenu_px[DM_W * DM_H];
+
+static int dmenu_update(void) {
+    char lines[16][DBG_LINE_MAX];
+    int n, pick, i, k;
+    dbg_menu_text(lines, 16, &n, &pick);
+    for (i = 0; i < DM_W * DM_H; i++) {
+        dmenu_px[i] = 0xD0200000u;
+    }
+    for (k = 0; k < n; k++) {
+        int y = 4 + k * 11 + (k >= 3 ? 4 : 0);
+        uint32_t col = k == 0 ? 0xFF40FFFFu : k < 3 ? 0xFFC0C0C0u : k == pick ? 0xFF40FF40u : 0xFFFFFFFFu;
+        if (k == pick) {
+            for (i = (y - 1) * DM_W; i < (y + 9) * DM_W && i < DM_W * DM_H; i++) {
+                dmenu_px[i] = 0xF0503000u;
+            }
+        }
+        menu_text(dmenu_px, DM_W, DM_H, 6, y, lines[k], col, 1);
+    }
+    glActiveTexture(GL_TEXTURE0);
+    if (dmenu_tex == 0) {
+        glGenTextures(1, &dmenu_tex);
+        glBindTexture(GL_TEXTURE_2D, dmenu_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, DM_W, DM_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, dmenu_px);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, dmenu_tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, DM_W, DM_H, GL_RGBA, GL_UNSIGNED_BYTE, dmenu_px);
+    }
+    cur.tex = dmenu_tex;
+    return 1;
 }
 
 /* ---- textures ---- */
@@ -1376,17 +1424,32 @@ static void order_fix(const RD_FRAME* f);
    gave 3800 a frame on average and up to 10.8 ms of cutting, the frame over its 16.7 ms; the others look at a few
    hundred */
 static unsigned cut_most;
+/* the budget only while the frames are heavy: armed for CUT_HOLD frames by a frame that took over CUT_HEAVY_US to
+   prepare (at the default 333 MHz the fights' heaviest take 11 ms; Abyss's fall, 15 at 444 MHz and so about 19 here,
+   for many frames), and again by each frame in which it had to stop cutting (the screen still that full); a frame
+   prepared lighter thanks to it keeps it on */
+#define CUT_HEAVY_US 12000u
+#define CUT_HOLD 30
+static int cut_hold;
+static volatile int cut_capped;
 
 static void make_pieces(PCTX* x, const RD_FRAME* f, int from, int to) {
     int i;
+    unsigned most;
     if (cut_most == 0) {
         cut_most = getenv("MVC2_CUT_MOST") != NULL && atoi(getenv("MVC2_CUT_MOST")) > 0 ? (unsigned)atoi(getenv("MVC2_CUT_MOST")) : 1500u;
     }
+    /* every cut while the frames are light (a hyper's finish, its streaks cut against the fighters, behind them as
+       they should be); the budget only after a heavy frame, the one way to keep that 60 */
+    most = cut_hold > 0 ? cut_most : 0xffffffffu;
     for (i = from; i < to; i++) {
         if (!tinfo[i].drawn) {
             continue;
         }
-        if (tinfo[i].deep && shallow_room && x->candidates < cut_most) {
+        if (tinfo[i].deep && shallow_room && x->candidates >= most) {
+            cut_capped = 1;
+        }
+        if (tinfo[i].deep && shallow_room && x->candidates < most) {
             int before = x->n;
             cut_deep(x, f, i);
             x->cut += x->n - before > 1;
@@ -1397,7 +1460,9 @@ static void make_pieces(PCTX* x, const RD_FRAME* f, int from, int to) {
             }
             q->t = &f->tris[RD_TRANS][i];
             q->d = &vdepth[vbase[RD_TRANS] + i * 3];
-            q->key = tinfo[i].zmid;
+            /* a deep one left whole by the budget: sorted by its far end, so a backdrop plane reaching toward the
+               camera (a hyper's finish, its streaks behind the fighters) is drawn behind the sprites, not through them */
+            q->key = tinfo[i].deep ? tinfo[i].zlo : tinfo[i].zmid;
             q->zlo = tinfo[i].zlo, q->zhi = tinfo[i].zhi;
             q->adds = state_adds[q->t->state];
         }
@@ -2099,6 +2164,12 @@ static void prepare(const VFRAME* v) {
     }
     t1 = now_us();
     perf.prep_us += t1 - t0;
+    if (t1 - t0 > CUT_HEAVY_US || cut_capped) {
+        cut_hold = CUT_HOLD;
+    } else if (cut_hold > 0) {
+        cut_hold--;
+    }
+    cut_capped = 0;
     perf.tris += (unsigned)(nverts / 3);
     perf.batches += (unsigned)nbatches;
 }
@@ -3360,6 +3431,37 @@ static void draw_frame(void) {
         attribs(q);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
+    if (dbg_menu_open() && dmenu_update()) {
+        /* the debug menu, in the middle, over everything */
+        static const float zero[4] = { 0, 0, 0, 0 }, decal[4] = { 0, 0, 0, 1 }, size[4] = { 0, 0, DM_W, DM_H };
+        float w = DM_W * 1.5f, h = DM_H * 1.5f, left = (SCREEN_W - w) * 0.5f, top = (SCREEN_H - h) * 0.5f;
+        float x0 = left / SCREEN_W * 2 - 1, x1 = (left + w) / SCREEN_W * 2 - 1;
+        float y0 = 1 - top / SCREEN_H * 2, y1 = 1 - (top + h) / SCREEN_H * 2;
+        VTX q[6];
+        const float xy[6][4] = { { x0, y0, 0, 0 }, { x1, y0, 1, 0 }, { x0, y1, 0, 1 },
+                                 { x0, y1, 0, 1 }, { x1, y0, 1, 0 }, { x1, y1, 1, 1 } };
+        memset(q, 0, sizeof q);
+        for (i = 0; i < 6; i++) {
+            q[i].x = xy[i][0], q[i].y = xy[i][1], q[i].z = 0.0f, q[i].w = 1.0f, q[i].u = xy[i][2], q[i].v = xy[i][3];
+            memcpy(q[i].clamp, no_clamp, sizeof no_clamp);
+            q[i].fw = 1.0f;
+            memset(q[i].base, 255, 4);
+        }
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(0, 0, SCREEN_W, SCREEN_H);
+        const int op = program_for(P_TEX + P_SHADE * 4);
+        use_program(op);
+        set_uniform(op, 0, progs[op].shade, decal);
+        set_uniform(op, 1, progs[op].fog, zero);
+        set_uniform(op, 2, progs[op].fog_color, zero);
+        set_uniform(op, 3, progs[op].misc, size);
+        glBindTexture(GL_TEXTURE_2D, dmenu_tex);
+        cur.tex = dmenu_tex;
+        set_blend(1, RD_SRC_ALPHA, RD_INV_SRC_ALPHA);
+        set_depth(RD_ALWAYS, 0);
+        attribs(q);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     perf.gl_us += now_us() - t0;
 }
 
@@ -3688,6 +3790,13 @@ static void debug_keys(void) {
         return;
     }
     now = pad.buttons;
+    if ((now & SCE_CTRL_SELECT) && (now & SCE_CTRL_DOWN) && (now & (SCE_CTRL_L1 | SCE_CTRL_LTRIGGER))) {
+        held = now;     /* the debug menu's combination: no picture, burst or overlay switch */
+        return;
+    }
+    if (dbg_menu_open()) {
+        now &= ~(uint32_t)(SCE_CTRL_UP | SCE_CTRL_DOWN);    /* its lines' moves: no burst, no overlay switch */
+    }
     /* a combination when both its buttons are down and were not both before: in either order */
 #define COMBO(k) ((now & SCE_CTRL_SELECT) && (now & (k)) && !((held & SCE_CTRL_SELECT) && (held & (k))))
     /* through the Ext2 call the handheld's shoulder buttons are L1 and R1 (LTRIGGER and RTRIGGER being L2 and R2):

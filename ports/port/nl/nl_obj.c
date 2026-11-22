@@ -12,6 +12,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
 
 #include "naomi_host.h"
 #include "nl_port.h"
@@ -478,6 +479,48 @@ float host_text_dx(float x0, float x1, int in_game) {
         return 0.0f;
     }
     return mid < 320.0f - hud_dz ? -host_wide_x : mid > 320.0f + hud_dz ? host_wide_x : 0.0f;
+}
+
+/* a copy of a model whose groups drawn with texture from are drawn with texture to (the intro's extra name tiles on a
+   wider screen: their own pictures on the model of the first); NULL if it has no memory */
+int* host_obj_clone_tex(const int* obj, int from, int to) {
+    const uint8_t* p = (const uint8_t*)obj + 24;
+    size_t size;
+    uint8_t *c, *q;
+    while (word(p) != 0) {
+        p += 80 + word(p + 76);
+    }
+    size = (size_t)(p + 4 - (const uint8_t*)obj);
+    if ((c = memalign(32, size)) == NULL) {
+        return NULL;
+    }
+    memcpy(c, obj, size);
+    for (q = c + 24; word(q) != 0; q += 80 + word(q + 76)) {
+        uint32_t tcw = word(q + 12);
+        if ((tcw & 0x1FFFFF) == (uint32_t)from) {
+            tcw = (tcw & ~0x1FFFFFu) | (uint32_t)to;
+            memcpy(q + 12, &tcw, 4);
+        }
+    }
+    return (int*)c;
+}
+
+void host_obj_free(int* obj) {
+    free(obj);
+}
+
+/* texture to made of the texels at src, the size and kind of texture like (the extra name tiles' pictures) */
+int host_tex_like(int like, int to, const void* src) {
+    NLthd thd;
+    if (like < 0 || like >= NL_MAX_TEX || to < 0 || to >= NL_MAX_TEX || !nl_tex[like].loaded) {
+        return 0;
+    }
+    thd.width = nl_tex[like].tex.width;
+    thd.height = nl_tex[like].tex.height;
+    thd.type = nl_tex[like].type;
+    thd.address = (void*)src;
+    thd.globl_index = to;
+    return nl_tex_load(&nl_tex[to], &thd);
 }
 
 /* a wide_side effect's distance from its place, and the screen's extra width past a side (ASPECT_RATIO=WIDE) */

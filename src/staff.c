@@ -255,6 +255,9 @@ void staff_main( void )
 		staff_init, staff_move, staff_exit,
 	} ;
 
+#ifdef HOST_PORT
+	{ extern void port_dbg_staff_hook( void ) ; port_dbg_staff_hook() ; }	/* the debug menu's skip to the logo */
+#endif
 	staff_jmp[Sys->routine_1]() ;
 	work_list_move( W_SYS ) ;
 	work_list_move( W_BACK ) ;
@@ -1007,6 +1010,15 @@ static void logo_flash_set( void )
 		ew->disp_z = 0.4f ;
 		ew->disp_zm_x = 20.0f ;
 		ew->disp_zm_y = 15.0f ;
+#ifdef HOST_PORT
+		{	/* the flash over the whole of a wider screen, from its left edge (the PS Vita's ASPECT_RATIO=WIDE; as it was otherwise) */
+			extern Float host_wide_side_x( int side ) ;
+			extern Float host_wide_scale( void ) ;
+
+			ew->disp_x = host_wide_side_x( -1 ) ;
+			ew->disp_zm_x *= host_wide_scale() ;
+		}
+#endif
 		ew->disp_ang = 0 ;
 		ew->disp_list = 2 ;
 		ew->disp_flip = 0x1005 ;

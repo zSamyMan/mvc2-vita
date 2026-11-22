@@ -451,12 +451,17 @@ static const char* const debug_vars[] = {
 
 /* MVC2_TEST=bits (testing only): 1 the computer's players at 1 vital, 2 the human's hyper gauge kept full, 4 a note of
    the computer's vital each second, 8 the human's vital kept full */
+static int test_flags = -1;
 int host_test_flags(void) {
-    static int f = -1;
-    if (f < 0) {
-        f = getenv("MVC2_TEST") != NULL ? atoi(getenv("MVC2_TEST")) : 0;
+    if (test_flags < 0) {
+        test_flags = getenv("MVC2_TEST") != NULL ? atoi(getenv("MVC2_TEST")) : 0;
     }
-    return f;
+    return test_flags;
+}
+
+/* the debug menu's switches over them */
+void host_test_flags_set(int f) {
+    test_flags = f;
 }
 
 /* MVC2_BOSS=n (testing only): a side joining the arcade starts at its fight n (7: the last, Abyss) */
@@ -519,10 +524,19 @@ void vita_early_init(void) {
     tty_on = getenv("MVC2_TTY") != NULL && atoi(getenv("MVC2_TTY")) != 0;
     say("vita: renderer %s, soft picture %s, texture skip %s", getenv("MVC2_RENDERER") ? getenv("MVC2_RENDERER") : "gpu",
         getenv("MVC2_RDQUALITY") ? getenv("MVC2_RDQUALITY") : "exact", getenv("MVC2_TEX_SKIP"));
-    scePowerSetArmClockFrequency(444);
-    scePowerSetBusClockFrequency(222);
-    scePowerSetGpuClockFrequency(222);
-    scePowerSetGpuXbarClockFrequency(166);
+    /* CLOCKS (env.txt): 333 (the default, the Vita's own profile: ARM 333, GPU 166, crossbar 111 MHz; the bus stays at 222) or 444
+       (ARM 444, bus 222, GPU 222, crossbar 166: more heat and battery, for comparison) */
+    if (getenv("CLOCKS") != NULL && atoi(getenv("CLOCKS")) == 444) {
+        scePowerSetArmClockFrequency(444);
+        scePowerSetBusClockFrequency(222);
+        scePowerSetGpuClockFrequency(222);
+        scePowerSetGpuXbarClockFrequency(166);
+    } else {
+        scePowerSetArmClockFrequency(333);
+        scePowerSetBusClockFrequency(166);
+        scePowerSetGpuClockFrequency(166);
+        scePowerSetGpuXbarClockFrequency(111);
+    }
     say("vita: clocks ARM %d, bus %d, GPU %d, crossbar %d MHz", scePowerGetArmClockFrequency(),
         scePowerGetBusClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
     sceKernelGetFreeMemorySize(&mem);

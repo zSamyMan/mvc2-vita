@@ -811,7 +811,27 @@ end:
 }
 
 /* the scene's works, and what its camera and background hold */
-static PLAYER_WORK *at02_w[40] ;
+#ifdef HOST_PORT
+/* the PS Vita's ASPECT_RATIO=WIDE: a wider screen shows seven of the names' tiles at once, not five, so two more
+   (works 40 and 41, with copies of the first tile's model drawing pictures of their own) keep a tile from being taken
+   for the next name while it is still in sight; with the names coming in and going at the wider screen's sides */
+#define AT02_WORKS		42
+#define AT02_XTEX		0xff0	/* the extra tiles' textures */
+extern Float host_wide_side_x( int side ) ;
+extern int *host_obj_clone_tex( const int *obj, int from, int to ) ;
+extern int host_tex_like( int like, int to, const void *src ) ;
+extern void name_pic_unpack( int no, Uint16 *dst ) ;
+extern void host_obj_free( int *obj ) ;	/* the host's: a copy host_obj_clone_tex made */
+#define AT02_WIDE		host_wide_side_x( 1 )
+#define AT02_SLOTS		( AT02_WIDE > 0.0f ? 7 : 5 )
+static int *at02_xobj[2] ;
+static Uint16 at02_xpic[2][0x10000] ;	/* 128 KB each, as the five tiles' */
+#else
+#define AT02_WORKS		40
+#define AT02_WIDE		0.0f
+#define AT02_SLOTS		5
+#endif
+static PLAYER_WORK *at02_w[AT02_WORKS] ;
 static PLAYER_WORK *at02_cam_w ;
 static VEC3 at02_eye ;
 static VEC3 at02_target ;
@@ -992,6 +1012,34 @@ void at02_w_kind_set( PLAYER_WORK *ew, int no )
 	ew->rot[2] = 0 ;
 }
 
+#ifdef HOST_PORT
+/* the extra tiles: off (at each change of the scene's parts), or made ready as the five are when the names come in */
+static void at02_xw_off( void )
+{
+	int k ;
+
+	for( k = 40 ; k < 42 ; k ++ ) at02_w[k]->be_flag = at02_w[k]->disp_flag = 0 ;
+}
+
+static void at02_xw_set( void )
+{
+	int k ;
+
+	at02_xw_off() ;
+	if( !( AT02_WIDE > 0.0f ) ) return ;
+	for( k = 0 ; k < 2 ; k ++ ){
+		if( at02_xobj[k] ) host_obj_free( at02_xobj[k] ) ;
+		at02_xobj[k] = host_obj_clone_tex( ( int * )obj_dm08->obj[55], 0x81d, AT02_XTEX + k ) ;
+		at02_w_kind_set( at02_w[40 + k], 0 ) ;
+		at02_w[40 + k]->sub_prio = 18 + k ;
+		if( at02_xobj[k] ) at02_w[40 + k]->obj = at02_xobj[k] ;
+	}
+}
+#else
+#define at02_xw_off()
+#define at02_xw_set()
+#endif
+
 /* the name tiles' places and the order the characters' names come in */
 extern void name_pic_set( int side, Uint32 no ) ;
 extern void _quick_odd_mvn( void ) ;
@@ -1017,7 +1065,7 @@ static void at02_name_disp( void )
 	bits[0] = Sys->char_open0 ;
 	bits[1] = Sys->char_open1 ;
 	if( at02_name_no < 28 ){
-		i = at02_name_no % 5 ;
+		i = at02_name_no % AT02_SLOTS ;
 		if( Sys->timer1 >= AT02_NAME2_IN ) no = at02_name_ord0[at02_name_no] ;
 		else no = at02_name_ord1[at02_name_no] ;
 		e = &at02_name_pos[no * 4] ;
@@ -1029,11 +1077,20 @@ static void at02_name_disp( void )
 		else add = 6.0f ;
 		pos.x += add ;
 		nlProjectScreen( &pos, &scr.x ) ;
-		if( Sys->timer1 >= AT02_NAME2_IN && !( scr.x > 640.0f ) || Sys->timer1 < AT02_NAME2_IN && !( scr.x < 0.0f ) ){
+		if( Sys->timer1 >= AT02_NAME2_IN && !( scr.x > 640.0f + AT02_WIDE ) || Sys->timer1 < AT02_NAME2_IN && !( scr.x < 0.0f - AT02_WIDE ) ){
+#ifdef HOST_PORT
+			if( i >= 5 ){	/* an extra tile: its picture straight into its own texture */
+				ew = at02_w[35 + i] ;
+				name_pic_unpack( no, at02_xpic[i - 5] ) ;
+				host_tex_like( 0x81d, AT02_XTEX + i - 5, at02_xpic[i - 5] ) ;
+			} else
+#endif
+			{
 			ew = at02_w[13 + i] ;
 			tex_req_flag = 1 ;
 			tex_req_no = 6 + i ;
 			name_pic_set( i, no ) ;
+			}
 			ew->be_flag = 1 ;
 			ew->disp_flag = 1 ;
 			ew->pos.x = e[0] * 10.0f ;
@@ -1066,7 +1123,7 @@ static void at02_name_disp( void )
 		if( Sys->timer1 >= AT02_NAME2_IN ) pos.x += 20.0f ;
 		else pos.x -= 20.0f ;
 		nlProjectScreen( &pos, &scr.x ) ;
-		if( Sys->timer1 >= AT02_NAME2_IN && scr.x < 0.0f || Sys->timer1 < AT02_NAME2_IN && scr.x > 640.0f ){
+		if( Sys->timer1 >= AT02_NAME2_IN && scr.x < 0.0f - AT02_WIDE || Sys->timer1 < AT02_NAME2_IN && scr.x > 640.0f + AT02_WIDE ){
 			ew->disp_flag = 0 ;
 			ew->be_flag = 0 ;
 		}
@@ -1191,6 +1248,7 @@ static void at02_script( void )
 		ew->timer0 = 1 ;
 		break ;
 	case AT02_NAME1_IN:
+		at02_xw_set() ;
 		at02_back_col[0] = -1 ;
 		at02_back_col[1] = -1 ;
 #ifndef TARGET_DC
@@ -1213,6 +1271,7 @@ static void at02_script( void )
 		}
 		break ;
 	case AT02_NAME1_OUT:
+		at02_xw_off() ;
 		at02_back_col[0] = 0xff000000 ;
 		at02_back_col[1] = 0xff000000 ;
 		fog_work.on = 0 ;
@@ -1246,6 +1305,7 @@ static void at02_script( void )
 		}
 		break ;
 	case AT02_FRAME( 980, 970 ):
+		at02_xw_off() ;
 		at02_back_col[0] = 0xffff0000 ;
 		at02_back_col[1] = 0xff000000 ;
 		tex_req_flag = 1 ;
@@ -1273,6 +1333,7 @@ static void at02_script( void )
 		}
 		break ;
 	case AT02_NAME2_IN:
+		at02_xw_set() ;
 		at02_back_col[0] = -1 ;
 		at02_back_col[1] = -1 ;
 #ifndef TARGET_DC
@@ -1296,6 +1357,7 @@ static void at02_script( void )
 		}
 		break ;
 	case AT02_NAME2_OUT:
+		at02_xw_off() ;
 		at02_back_col[0] = 0xff000000 ;
 		at02_back_col[1] = 0xff000000 ;
 		fog_work.on = 0 ;
@@ -1425,6 +1487,16 @@ static void at02_obj_disp( PLAYER_WORK *ew )
 	nlRotateAY( ew->rot[1] ) ;
 	nlScaleV( &ew->scale ) ;
 	nlSetScaleFactor( obj_scale_max( &ew->scale ) ) ;
+#ifdef HOST_PORT
+	if( ew->sub_no == 35 || ew->sub_no == 37 ){	/* the bars behind CABLE and RUBY HEART: their ends, past the 4:3's sides, out
+												   to a wider screen's (the PS Vita's WIDE), the names on them as they are */
+		extern void host_wide_edge( int on ) ;
+
+		host_wide_edge( 1 ) ;
+		nlObjPutUseViewMatrix( ew->obj ) ;
+		host_wide_edge( 0 ) ;
+	} else
+#endif
 	nlObjPutUseViewMatrix( ew->obj ) ;
 	nlPopMatrix( 1 ) ;
 }
@@ -1556,7 +1628,11 @@ static void at02_init( void )
 	do {
 		*w = work_get( 0, W_SYS, LIST_END ) ;
 		w ++ ;
-	} while( w < &at02_w[40] ) ;
+	} while( w < &at02_w[AT02_WORKS] ) ;
+#ifdef HOST_PORT
+	at02_w[40]->be_flag = at02_w[40]->disp_flag = 0 ;
+	at02_w[41]->be_flag = at02_w[41]->disp_flag = 0 ;
+#endif
 	ex_sound_load2() ;
 	total_vol_init() ;
 	TexLoad( 12 ) ;
@@ -1600,10 +1676,10 @@ static void at02_main( void )
 	if( ( Sys->timer1 >= AT02_NAME1_IN && Sys->timer1 < AT02_NAME1_OUT ) || ( Sys->timer1 >= AT02_NAME2_IN && Sys->timer1 < AT02_NAME2_OUT ) ){
 		at02_name_disp() ;
 	}
-	for( i = 0 ; i < 40 ; i ++ ){
+	for( i = 0 ; i < AT02_WORKS ; i ++ ){
 		if( ( ew = at02_w[i] ) && ew->be_flag ) at02_w_main( ew ) ;
 	}
-	for( i = 0 ; i < 40 ; i ++ ){
+	for( i = 0 ; i < AT02_WORKS ; i ++ ){
 		if( ( ew = at02_w[i] ) && ew->be_flag ) at02_obj_disp( ew ) ;
 	}
 #ifdef TARGET_DC

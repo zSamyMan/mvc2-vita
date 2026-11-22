@@ -17,6 +17,14 @@ void finish_ef_set( void )
 
 	finish_a_set( ew ) ;
 	finish_c_set( ew ) ;
+#ifdef HOST_PORT
+	{	/* the port's test hook (MVC2_TEST bit 16, testing builds only): two seconds of pictures from the finish */
+		extern int host_test_flags( void ) ;
+		extern void host_dbg_burst( void ) ;
+
+		if( host_test_flags() & 16 ) host_dbg_burst() ;
+	}
+#endif
 	if( vs_sys_work.game_mode != 8 ){
 		s3l_fade_out_set( 1 ) ;
 		return ;

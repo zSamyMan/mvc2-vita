@@ -106,9 +106,11 @@ static void strip(int num, int mode, const uint32_t* vt, int translucent) {
         v[i].base = vt[fmt[1]];
         v[i].offset = 0;
     }
-    if (host_wide_x != 0.0f && !disp_coord) {
+    if (host_wide_x != 0.0f) {
         /* a box over the whole screen (a fade, a scene's shade, the pause's dark) over the wider one too
-           (ASPECT_RATIO=WIDE); a plain colour, so nothing stretches */
+           (ASPECT_RATIO=WIDE); a plain colour, so nothing stretches. Through the 2D matrix as well (disp_coord: the
+           staff roll's shade behind the end logo, drawn so, stayed a 4:3 rectangle), its sides still exactly 0
+           and 640 then, which a strip of the 3D world's practically never is */
         float lo = v[0].x, hi = v[0].x;
         for (i = 1; i < num; i++) {
             lo = v[i].x < lo ? v[i].x : lo;
