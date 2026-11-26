@@ -259,9 +259,7 @@ void disp_all( void )
 	if( Sys->heart_step > 1 ) return ;
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
-	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
-	scr_wide_stage( 0 ) ;
 	scr_far_matrix_set() ;
 	obj_calc_list( 7 ) ;
 	obj_disp_list( 7 ) ;
@@ -290,9 +288,7 @@ void disp_front_stage( void )
 	if( Sys->heart_step > 1 ) return ;
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
-	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
-	scr_wide_stage( 0 ) ;
 }
 
 /****************************************************************/
@@ -337,9 +333,7 @@ void disp_front_stage2( void )
 	if( Sys->heart_step > 1 ) return ;
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
-	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
-	scr_wide_stage( 0 ) ;
 }
 
 /****************************************************************/
@@ -379,9 +373,7 @@ void disp_stage_front( void )
 {
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
-	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
-	scr_wide_stage( 0 ) ;
 	scr_2d_matrix_set() ;
 	obj_calc_list( 11 ) ;
 	obj_disp_list( 11 ) ;
@@ -611,7 +603,7 @@ static void stage_obj_disp( void )
 {
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
-	scr_wide_stage( 1 ) ;
+	scr_wide_stage( 1 ) ;	/* the fight's stage alone (game_disp): the select's cards are list 5 models too */
 	obj_disp_list( 5 ) ;
 	scr_wide_stage( 0 ) ;
 }

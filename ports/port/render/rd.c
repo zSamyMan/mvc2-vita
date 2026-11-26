@@ -205,10 +205,11 @@ static struct {
    parted (stage 4's tree, the clock tower: 4 to 10% by depth); flat at 3% from 400 the ends fell short again (stage
    4's left wall, the clock tower's corners) and the tree, nearer than 400, still parted in the rise. So: the rise
    kept to the floor by the players (to 60: the clock tower's right hall, near, fell a corner short at 150 and 8%),
-   the middle as wide as the ends need (9%), the far bands alone more (stage 1's mesas,
+   the middle as wide as the ends need (12%: the clock tower's right wall, 5760 behind, ended at x 738 with 9%,
+   7 px short, its end seen through the translucent piece before it; 11.1% reaches), the far bands alone more (stage 1's mesas,
    9100 behind, ending at x 693 at the right wall: 16%, 70 px more; 13.5% left a pixel) */
-#define WIDE_STAGE_MID 0.09f
-#define WIDE_STAGE_FAR 0.07f
+#define WIDE_STAGE_MID 0.12f
+#define WIDE_STAGE_FAR 0.04f
 #define WIDE_STAGE_D0 60.0f
 #define WIDE_STAGE_D1 7000.0f
 #define WIDE_STAGE_D2 9000.0f
