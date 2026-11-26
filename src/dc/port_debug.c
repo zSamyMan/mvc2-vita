@@ -4,6 +4,8 @@
 #include "player.h"
 
 #ifdef HOST_PORT
+extern void load_stop( void ) ;
+extern void fight_load_start( int no ) ;
 
 /* the host's (vita_debug_menu.c): the game only calls out, the program keeping its own names to itself */
 extern int host_dbg_take( void ) ;			/* the menu's action, once, else 0 */
@@ -33,6 +35,17 @@ static void routines_clear( void )
 	Sys->exit_flag = 0 ;
 }
 
+/* what the training menu's restart stops before it leaves a fight (pl_sw.c's training_restart) */
+static void scene_leave( void )
+{
+	work_init() ;
+	back_color_set( 0xff000000 ) ;
+	sound_all_off() ;
+	se_all_off() ;
+	stream_stop() ;
+	load_stop() ;
+}
+
 /* each game frame, first: the menu's request, if there is one */
 void port_dbg_frame( void )
 {
@@ -41,6 +54,21 @@ void port_dbg_frame( void )
 	host_dbg_report( Sys->task_no, Sys->scene_no, stage_no, Sys->stage_cnt + 1 ) ;
 	if( !( a = host_dbg_take() ) ) return ;
 	switch( a ){
+	case 1:	/* back to the select, the next fight on the menu's stage: as the training menu's CHARACTER CHANGE does it
+			   (pl_sw.c's training_restart): the works, the sounds, the stream and the loads under way stopped first.
+			   Going back without them (straight to the versus step or the select) crashed mid-fight */
+		if( Sys->task_no != 2 ) break ;
+		Sys->play_side = 0 ;
+		Sys->new_side = Sys->entry_side ;
+		Sys->join_side = Sys->entry_side ;
+		Sys->scene_no = 0 ;
+		routines_clear() ;
+		Sys->join_flag = 0 ;
+		Sys->heart_step = 0 ;
+		Sys->entry_stop = 1 ;
+		scene_leave() ;
+		fight_load_start( 12 ) ;
+		break ;
 	case 2:	/* the next fight the arcade's last: Abyss */
 		Sys->stage_cnt = 7 ;
 		pl_work[0].stage_cnt = pl_work[1].stage_cnt = 7 ;
@@ -48,6 +76,7 @@ void port_dbg_frame( void )
 	case 3:	/* the staff roll (a game must be running) */
 	case 4:	/* or straight to its end: the logo, then THANK YOU FOR PLAYING */
 		if( Sys->task_no != 2 ) break ;
+		scene_leave() ;
 		Sys->scene_no = 4 ;
 		routines_clear() ;
 		staff_logo_pending = a == 4 ;

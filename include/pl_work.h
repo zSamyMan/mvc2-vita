@@ -632,8 +632,9 @@ typedef struct PLAYER_WORK {
 /* the PS Vita port's: how much more of the stage a screen wider than 4:3 shows past each side (0 on 4:3), for an
    effect that leaves at the screen's edge: the edges it leaves at, as wide as the screen is */
 extern Float host_wide_side_x( int side ) ;
-#define SCR_WIDE_LEFT	( scr_work.scr_left + host_wide_side_x( -1 ) )
-#define SCR_WIDE_RIGHT	( scr_work.scr_right + host_wide_side_x( 1 ) )
+extern Float scr_wide_dx( void ) ;	/* the camera drawn with, from the game's (scr.c) */
+#define SCR_WIDE_LEFT	( scr_work.scr_left + host_wide_side_x( -1 ) + scr_wide_dx() )
+#define SCR_WIDE_RIGHT	( scr_work.scr_right + host_wide_side_x( 1 ) + scr_wide_dx() )
 /* the PS Vita port's: on a screen wider than 4:3 (ASPECT_RATIO=WIDE), drawn moved to its left or right side */
 #define OBJ_WIDE_EDGE	0x10000000	/* its parts past the 4:3's sides pushed out to the wide screen's (a bar's ends) */
 #define OBJ_WIDE_L	0x20000000

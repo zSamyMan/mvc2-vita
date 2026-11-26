@@ -446,7 +446,7 @@ int vita_debug = 1;
 static const char* const debug_vars[] = {
     "MVC2_OVERLAY", "MVC2_SHOT", "MVC2_SHOT_SOFT", "MVC2_DUMP", "MVC2_BURST", "MVC2_TRACE", "MVC2_GPUTIME",
     "MVC2_SNDPROF", "MVC2_TTY", "MVC2_CONTROL", "MVC2_TRACE_GD", "MVC2_SNDDBG", "MVC2_SNDLOG", "MVC2_FSX",
-    "MVC2_BOSS", "MVC2_TEST",
+    "MVC2_BOSS", "MVC2_TEST", "MVC2_STAGE",
 };
 
 /* MVC2_TEST=bits (testing only): 1 the computer's players at 1 vital, 2 the human's hyper gauge kept full, 4 a note of

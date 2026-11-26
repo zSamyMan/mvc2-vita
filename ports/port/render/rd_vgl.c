@@ -116,6 +116,8 @@ typedef struct TEX {
     GLuint ring[6];             /* the GL textures it takes turns in (id is ring[ring_at]), see tex_upload */
     uint32_t ring_used[6];      /* render_no each was last drawn with */
     uint8_t ring_at, ring_n;
+    uint32_t up_no;             /* render_no of its last upload */
+    uint32_t late_no;           /* render_no it was last left a frame late (tex_get) */
 } TEX;
 
 static VTX* verts;
@@ -391,21 +393,29 @@ static void overlay_update(void) {
     }
 #undef OV_LINE
     glActiveTexture(GL_TEXTURE0);
-    if (overlay_tex == 0) {
-        glGenTextures(1, &overlay_tex);
-        glBindTexture(GL_TEXTURE_2D, overlay_tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    }
-    glBindTexture(GL_TEXTURE_2D, overlay_tex);
+    /* two textures in turn, the other's last draw 30 frames back: one written in place while the GPU may still read
+       it waits for the GPU (the debug menu's panel lost the render thread its overlap that way) */
     {
-        static int made;
-        if (!made) {
+        static GLuint ring[2];
+        static int at, made[2];
+        if (ring[0] == 0) {
+            glGenTextures(2, ring);
+            for (i = 0; i < 2; i++) {
+                glBindTexture(GL_TEXTURE_2D, ring[i]);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            }
+        } else {
+            at ^= 1;
+        }
+        glBindTexture(GL_TEXTURE_2D, ring[at]);
+        if (!made[at]) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, OV_W, OV_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, overlay_px);
-            made = 1;
+            made[at] = 1;
         } else {
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, OV_W, OV_H, GL_RGBA, GL_UNSIGNED_BYTE, overlay_px);
         }
+        overlay_tex = ring[at];
     }
     cur.tex = overlay_tex;
     memset(&ov, 0, sizeof ov);
@@ -421,16 +431,33 @@ int rd_vgl_overlay_shown(void) {
     return overlay_on;
 }
 
-/* the debug menu's panel: its lines drawn into a texture each frame it is open, shown in the middle at 1.5 times */
+/* the debug menu's panel: its lines drawn into a texture, shown in the middle at 1.5 times. Drawn again only when its
+   text changed, and then into the other of two textures, at most once in DM_GAP frames: a texture the GPU may still be
+   reading (vitaGL keeps up to 4 frames in flight) is never written. Written every frame into one texture, each write
+   waited for the GPU to finish the frame before: the render thread lost its overlap (GL 3 to 8.5 ms, 46 to 50 fps
+   on stage 4 while the menu was open) */
 #define DM_W 304
 #define DM_H 172
-static GLuint dmenu_tex;
+#define DM_GAP 6
+static GLuint dmenu_ring[2], dmenu_tex;
+static int dmenu_at;
+static unsigned dmenu_wrote;    /* render_no of the last write */
 static uint32_t dmenu_px[DM_W * DM_H];
 
 static int dmenu_update(void) {
+    static char last[16][DBG_LINE_MAX];
+    static int last_n = -1, last_pick = -1;
     char lines[16][DBG_LINE_MAX];
     int n, pick, i, k;
     dbg_menu_text(lines, 16, &n, &pick);
+    glActiveTexture(GL_TEXTURE0);
+    if (dmenu_tex != 0 && (( n == last_n && pick == last_pick && memcmp(lines, last, sizeof lines) == 0) ||
+                           render_no - dmenu_wrote < DM_GAP)) {
+        cur.tex = 0;            /* bound by the caller */
+        return 1;               /* the same text (or one written too lately): the texture as it is */
+    }
+    memcpy(last, lines, sizeof lines);
+    last_n = n, last_pick = pick;
     for (i = 0; i < DM_W * DM_H; i++) {
         dmenu_px[i] = 0xD0200000u;
     }
@@ -444,17 +471,22 @@ static int dmenu_update(void) {
         }
         menu_text(dmenu_px, DM_W, DM_H, 6, y, lines[k], col, 1);
     }
-    glActiveTexture(GL_TEXTURE0);
-    if (dmenu_tex == 0) {
-        glGenTextures(1, &dmenu_tex);
-        glBindTexture(GL_TEXTURE_2D, dmenu_tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, DM_W, DM_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, dmenu_px);
+    if (dmenu_ring[0] == 0) {
+        glGenTextures(2, dmenu_ring);
+        for (k = 0; k < 2; k++) {
+            glBindTexture(GL_TEXTURE_2D, dmenu_ring[k]);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, DM_W, DM_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, dmenu_px);
+        }
+        dmenu_at = 0;
     } else {
-        glBindTexture(GL_TEXTURE_2D, dmenu_tex);
+        dmenu_at ^= 1;          /* the one not drawn with for DM_GAP frames */
+        glBindTexture(GL_TEXTURE_2D, dmenu_ring[dmenu_at]);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, DM_W, DM_H, GL_RGBA, GL_UNSIGNED_BYTE, dmenu_px);
     }
+    dmenu_tex = dmenu_ring[dmenu_at];
+    dmenu_wrote = render_no;
     cur.tex = dmenu_tex;
     return 1;
 }
@@ -551,6 +583,16 @@ static void hwpal_upload(void) {
     }
 }
 
+/*
+ * The uploads' time in a frame: a burst of sprite tiles changed at once (Abyss's last fall, thousands of tiles that
+ * frame) held one frame up 15 ms. Past TEX_FRAME_US of uploads in a frame, a texture already on the GPU whose source
+ * changed at the same size and format keeps its last texels for that frame and is sent the next (a tile a frame
+ * late, in such a burst only); one never sent is always sent. MVC2_TEX_FRAME_US: the budget, 0 none.
+ */
+static uint64_t frame_up_us;
+static unsigned frame_up_no;
+static unsigned tex_frame_us = 1;
+
 static void tex_upload(TEX* e, const RD_TEXTURE* t) {
     GLenum fmt = GL_RGBA, type = GL_UNSIGNED_SHORT_5_5_5_1;
     int k, bytes = 0;
@@ -622,6 +664,10 @@ static void tex_upload(TEX* e, const RD_TEXTURE* t) {
         }
         bytes += w * h * (is_pal(t->format) ? 1 : 2);
     }
+    if (frame_up_no != render_no) {
+        frame_up_no = render_no, frame_up_us = 0;
+    }
+    frame_up_us += now_us() - t0;
     e->hwpal = 0;
     if (hwpal > 0 && is_pal(t->format)) {
         SceGxmTexture* g = vglGetGxmTexture(GL_TEXTURE_2D);
@@ -638,6 +684,7 @@ static void tex_upload(TEX* e, const RD_TEXTURE* t) {
         }
     }
     e->serial = t->serial;
+    e->up_no = render_no;
     e->w = t->width, e->h = t->height, e->format = t->format, e->levels = k - 1;
     e->filter = -1;             /* glTexImage2D may reset the sampler: set again at the next draw */
     e->wrap_s = e->wrap_t = -1;
@@ -658,6 +705,21 @@ static TEX* tex_get(const SNAP* sn) {
         e->serial = ~sn->t.serial;
     }
     if (e->serial != sn->t.serial || e->w != sn->t.width || e->h != sn->t.height || e->format != sn->t.format) {
+        if (tex_frame_us == 1) {
+            const char* v = getenv("MVC2_TEX_FRAME_US");
+            tex_frame_us = v != NULL ? (unsigned)atoi(v) : 3000u;
+        }
+        /* only a tile that changed in the last two frames (a sprite's animation: its last texels are its frame
+           before) and that was not late the frame before. A tile taken over by another sprite (still for a while,
+           then changed) left late showed the sprite it held before, squares of the wrong sprite; one left late
+           frame after frame stayed wrong */
+        if (tex_frame_us != 0 && e->ring_n > 0 && frame_up_no == render_no && frame_up_us > tex_frame_us &&
+            e->w == sn->t.width && e->h == sn->t.height && e->format == sn->t.format && e->levels == sn->t.levels &&
+            render_no - e->up_no <= 2 && e->late_no != render_no - 1) {
+            e->used = render_no;    /* the frame's budget spent: its last texels this frame, sent the next */
+            e->late_no = render_no;
+            return e;
+        }
         tex_upload(e, &sn->t);
     }
     e->used = render_no;
@@ -1429,15 +1491,24 @@ static unsigned cut_most;
    for many frames), and again by each frame in which it had to stop cutting (the screen still that full); a frame
    prepared lighter thanks to it keeps it on */
 #define CUT_HEAVY_US 12000u
-#define CUT_HOLD 30
-static int cut_hold;
+/* or by two frames running whose preparing and the frame before's drawing (its uploads and GL) passed CUT_BUSY_US
+   together: Abyss's last form under a triple hyper's finish prepared in 11.2 ms, but with 1.5 ms of uploads and 5 ms
+   of GL the render thread took 17.7, and the frames fell to 30 for a second. A frame that had to stop cutting keeps it
+   on only while it is still near the frame's end (CUT_KEEP_US): kept on by that alone, or at 10.5 ms, one heavy
+   frame on the clock tower (11 to 13 ms there; its gears' light and shade, translucent, 800 to 1250 candidates every
+   frame) held it for good, its light flickering as the pieces cut and whole took turns */
+#define CUT_BUSY_US 15000u
+#define CUT_KEEP_US 14000u
+#define CUT_HOLD 60
+static int cut_hold, cut_heavy_run;
+static uint64_t last_draw_us;   /* draw_frame's last, from the render loop */
 static volatile int cut_capped;
 
 static void make_pieces(PCTX* x, const RD_FRAME* f, int from, int to) {
     int i;
     unsigned most;
     if (cut_most == 0) {
-        cut_most = getenv("MVC2_CUT_MOST") != NULL && atoi(getenv("MVC2_CUT_MOST")) > 0 ? (unsigned)atoi(getenv("MVC2_CUT_MOST")) : 1500u;
+        cut_most = getenv("MVC2_CUT_MOST") != NULL && atoi(getenv("MVC2_CUT_MOST")) > 0 ? (unsigned)atoi(getenv("MVC2_CUT_MOST")) : 500u;
     }
     /* every cut while the frames are light (a hyper's finish, its streaks cut against the fighters, behind them as
        they should be); the budget only after a heavy frame, the one way to keep that 60 */
@@ -1487,6 +1558,12 @@ static VBUF vb_work;
 
 static void add_pieces(VBUF* o, const RD_FRAME* f, int from, int to);
 static void trans_pre(const RD_FRAME* f);
+static void trans_post(const RD_FRAME* f);
+/* 1 while trans_post runs on the cutting thread (job 4): its cuts then all there, none handed back to itself */
+static volatile int tl_on_cut;
+/* MVC2_TRANS_AWAY (on unless 0): the translucent list's steps, all of them (pre, cuts, sort, order), on the cutting
+   thread while the render thread adds the opaque list; off: only pre there, the rest after on the render thread */
+static int trans_away = -1;
 
 static int cut_main(SceSize args, void* argp) {
     (void)args, (void)argp;
@@ -1506,6 +1583,12 @@ static int cut_main(SceSize args, void* argp) {
             break;
         case 3:
             depth_work_max = depth_part(cut_job.f, cut_job.from, cut_job.to);
+            break;
+        case 4:
+            trans_pre(cut_job.f);
+            tl_on_cut = 1;
+            trans_post(cut_job.f);
+            tl_on_cut = 0;
             break;
         }
         sceKernelSignalSema(cut_done, 1);
@@ -1789,7 +1872,7 @@ static void trans_post(const RD_FRAME* f) {
         return;
     }
     pcx[0].n = 0, pcx[0].npool = 0;
-    if (cut_go >= 0 && ndeep >= 32 && nshallow > 0) {
+    if (cut_go >= 0 && !tl_on_cut && ndeep >= 32 && nshallow > 0) {
         /* the second half of the deep ones (and the triangles among them) on the cutting thread */
         int half = 0, m;
         for (m = 0; m < n && half * 2 < ndeep; m++) {
@@ -1873,27 +1956,46 @@ static void trans_post(const RD_FRAME* f) {
  * weighing them too (the select screen's sphere: thousands) cost milliseconds a frame.
  */
 #define ORDER_WINDOW 12
-/* by place in the sorted order, moved with it: the window reads on in memory */
+/*
+ * By place in the sorted order, moved with it. The pairs weighed are mostly apart (stage 4's scenery: eleven
+ * thousand a frame, a tenth overlapping), and on the Vita's A9 each float compare waits for the VFP (vmrs): about
+ * 70 cycles a pair. So the pairs are first sifted with NEON, eight neighbours at a time with no flags: zlo, zhi as
+ * ordered integers (oz*) and the bounds in whole pixels, truncated a pixel out so never tighter than the exact ones
+ * (ox*, oy*), each in its own array; PINFO's floats are read only for the pairs that may overlap.
+ */
+#define ORDER_PAD 16            /* the arrays' room past the last entry: the sift reads 16 on */
 typedef struct {
-    float x0, y0, x1, y1, zlo, zhi;
+    float x0, y0, x1, y1;
     float px, py, pz, a, b;     /* z = pz + a (x - px) + b (y - py), made when first wanted */
     int piece;
-    uint8_t moved, plane, level;    /* level: one 1/w all over (a sprite) */
+    uint8_t moved, plane, level;    /* level: one 1/w all over (a sprite); plane 1 once made */
 } PINFO;
 static PINFO* pinfo;
+static int16_t *ox0, *oy0, *ox1, *oy1;
+static int32_t *ozlo, *ozhi;
 static int* pplace;             /* the places in the sorted order the blended pieces hold, in order */
 static int pinfo_room;
 
-static void make_bounds(PINFO* p) {
+/* a float's bits as an integer in the same order (negative ones too) */
+static inline int32_t zkey(float z) {
+    int32_t b;
+    memcpy(&b, &z, sizeof b);
+    return b >= 0 ? b : (int32_t)(b ^ 0x7fffffff);
+}
+
+/* the bounds of the piece at place i, floats and whole pixels, in NEON (no compares) */
+static void make_bounds(int i) {
+    PINFO* p = &pinfo[i];
     const RD_TRI* t = pieces[p->piece].t;
-    int k;
-    p->x0 = p->x1 = t->v[0].x, p->y0 = p->y1 = t->v[0].y;
-    for (k = 1; k < 3; k++) {
-        const RD_VTX* v = &t->v[k];
-        p->x0 = v->x < p->x0 ? v->x : p->x0, p->x1 = v->x > p->x1 ? v->x : p->x1;
-        p->y0 = v->y < p->y0 ? v->y : p->y0, p->y1 = v->y > p->y1 ? v->y : p->y1;
-    }
-    p->plane = 1;
+    float32x2_t a = vld1_f32(&t->v[0].x), b = vld1_f32(&t->v[1].x), c = vld1_f32(&t->v[2].x);
+    float32x2_t lo = vmin_f32(vmin_f32(a, b), c), hi = vmax_f32(vmax_f32(a, b), c);
+    /* truncation toward zero saturates; a pixel out either way covers floor and ceil */
+    int32x2_t ilo = vqsub_s32(vcvt_s32_f32(lo), vdup_n_s32(1)), ihi = vqadd_s32(vcvt_s32_f32(hi), vdup_n_s32(1));
+    int16x4_t n = vqmovn_s32(vcombine_s32(ilo, ihi));
+    vst1_f32(&p->x0, lo);       /* x0, y0 */
+    vst1_f32(&p->x1, hi);       /* x1, y1 */
+    ox0[i] = vget_lane_s16(n, 0), oy0[i] = vget_lane_s16(n, 1);
+    ox1[i] = vget_lane_s16(n, 2), oy1[i] = vget_lane_s16(n, 3);
 }
 
 static void make_plane(PINFO* p) {
@@ -1904,33 +2006,57 @@ static void make_plane(PINFO* p) {
     p->px = t->v[0].x, p->py = t->v[0].y, p->pz = t->v[0].z;
     p->a = det != 0.0 ? (float)((uz * vy - uy * vz) / det) : 0.0f;
     p->b = det != 0.0 ? (float)((ux * vz - uz * vx) / det) : 0.0f;
-    p->plane = 2;
+    p->plane = 1;
     order_planes++;
 }
 
-/* 1: p lies in front of q where they overlap (by more than rounding); 0 behind, level, or apart */
-static int in_front(PINFO* p, PINFO* q) {
+/* 1: the entries at places a and b may overlap (depths and whole-pixel bounds); 0: apart */
+static inline int may_overlap(int a, int b) {
+    int x0 = ox0[a] > ox0[b] ? ox0[a] : ox0[b], x1 = ox1[a] < ox1[b] ? ox1[a] : ox1[b];
+    int y0 = oy0[a] > oy0[b] ? oy0[a] : oy0[b], y1 = oy1[a] < oy1[b] ? oy1[a] : oy1[b];
+    return (ozlo[b] <= ozhi[a]) & (ozhi[b] >= ozlo[a]) & (x0 < x1) & (y0 < y1);
+}
+
+/* the places i+1..i+16 that may overlap the one at i, as bits (bit 0: i+1), eight at a time */
+static unsigned sift(int i) {
+    static const uint8_t bit[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+    const uint8x8_t bits = vld1_u8(bit);
+    int16x8_t ax0 = vdupq_n_s16(ox0[i]), ay0 = vdupq_n_s16(oy0[i]), ax1 = vdupq_n_s16(ox1[i]), ay1 = vdupq_n_s16(oy1[i]);
+    int32x4_t azlo = vdupq_n_s32(ozlo[i]), azhi = vdupq_n_s32(ozhi[i]);
+    unsigned mask = 0;
+    int g;
+    for (g = 0; g < 2; g++) {
+        int j = i + 1 + g * 8;
+        uint16x8_t cx = vcltq_s16(vmaxq_s16(vld1q_s16(&ox0[j]), ax0), vminq_s16(vld1q_s16(&ox1[j]), ax1));
+        uint16x8_t cy = vcltq_s16(vmaxq_s16(vld1q_s16(&oy0[j]), ay0), vminq_s16(vld1q_s16(&oy1[j]), ay1));
+        uint32x4_t z0 = vandq_u32(vcleq_s32(vld1q_s32(&ozlo[j]), azhi), vcgeq_s32(vld1q_s32(&ozhi[j]), azlo));
+        uint32x4_t z1 = vandq_u32(vcleq_s32(vld1q_s32(&ozlo[j + 4]), azhi), vcgeq_s32(vld1q_s32(&ozhi[j + 4]), azlo));
+        uint16x8_t c = vandq_u16(vandq_u16(cx, cy), vcombine_u16(vmovn_u32(z0), vmovn_u32(z1)));
+        uint8x8_t m = vand_u8(vmovn_u16(c), bits);
+        m = vpadd_u8(m, m), m = vpadd_u8(m, m), m = vpadd_u8(m, m);
+        mask |= (unsigned)vget_lane_u8(m, 0) << (g * 8);
+    }
+    return mask;
+}
+
+/* 1: p lies in front of q where they overlap (by more than rounding); 0 behind, level, or apart. The exact test,
+   for a pair the sift passed */
+static int in_front_exact(PINFO* p, PINFO* q) {
     float x0, y0, x1, y1, cx, cy, zp, zq;
     /* two level ones: the sort by 1/w already has them right (the menu's buttons: thousands of pairs a frame) */
-    if ((p->level & q->level) || q->zlo > p->zhi || q->zhi < p->zlo) {
+    if (p->level & q->level) {
         return 0;
     }
     order_checks++;
-    if (!p->plane) {
-        make_bounds(p);
-    }
-    if (!q->plane) {
-        make_bounds(q);
-    }
     x0 = p->x0 > q->x0 ? p->x0 : q->x0, x1 = p->x1 < q->x1 ? p->x1 : q->x1;
     y0 = p->y0 > q->y0 ? p->y0 : q->y0, y1 = p->y1 < q->y1 ? p->y1 : q->y1;
     if (x0 >= x1 || y0 >= y1) {
         return 0;
     }
-    if (p->plane < 2) {
+    if (!p->plane) {
         make_plane(p);
     }
-    if (q->plane < 2) {
+    if (!q->plane) {
         make_plane(q);
     }
     cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
@@ -1939,18 +2065,54 @@ static int in_front(PINFO* p, PINFO* q) {
     return zp > zq + zq * 1e-5f;
 }
 
+/* the entries at places a and b: a in front of b */
+static int front_at(int a, int b) {
+    return may_overlap(a, b) && in_front_exact(&pinfo[a], &pinfo[b]);
+}
+
+/* each array's entries at from..to-1 one place on (on 1) or at from+1..to one place back (on 0) */
+#define ORDER_SHIFT(arr, from, to, on) \
+    memmove(&(arr)[(from) + (on)], &(arr)[(from) + !(on)], sizeof *(arr) * (size_t)((to) - (from)))
+#define ORDER_SHIFT_ALL(from, to, on) do { \
+        ORDER_SHIFT(pinfo, from, to, on), ORDER_SHIFT(ox0, from, to, on), ORDER_SHIFT(oy0, from, to, on); \
+        ORDER_SHIFT(ox1, from, to, on), ORDER_SHIFT(oy1, from, to, on); \
+        ORDER_SHIFT(ozlo, from, to, on), ORDER_SHIFT(ozhi, from, to, on); \
+    } while (0)
+
+typedef struct {
+    PINFO p;
+    int16_t x0, y0, x1, y1;
+    int32_t zlo, zhi;
+} PKEEP;
+
+static void keep_at(PKEEP* k, int i) {
+    k->p = pinfo[i], k->x0 = ox0[i], k->y0 = oy0[i], k->x1 = ox1[i], k->y1 = oy1[i], k->zlo = ozlo[i], k->zhi = ozhi[i];
+}
+
+static void put_at(const PKEEP* k, int i) {
+    pinfo[i] = k->p, ox0[i] = k->x0, oy0[i] = k->y0, ox1[i] = k->x1, oy1[i] = k->y1, ozlo[i] = k->zlo, ozhi[i] = k->zhi;
+}
+
 /* the entries at from..to-1 one place on, the one at to put at from */
 static void rotate_in(int from, int to) {
-    PINFO keep = pinfo[to];
-    memmove(&pinfo[from + 1], &pinfo[from], sizeof *pinfo * (size_t)(to - from));
-    pinfo[from] = keep;
+    PKEEP k;
+    keep_at(&k, to);
+    ORDER_SHIFT_ALL(from, to, 1);
+    put_at(&k, from);
 }
 
 /* the entry at from put at to, those after it one place back */
 static void rotate_out(int from, int to) {
-    PINFO keep = pinfo[from];
-    memmove(&pinfo[from], &pinfo[from + 1], sizeof *pinfo * (size_t)(to - from));
-    pinfo[to] = keep;
+    PKEEP k;
+    keep_at(&k, from);
+    ORDER_SHIFT_ALL(from, to, 0);
+    put_at(&k, to);
+}
+
+static void order_free(void) {
+    free(pinfo), free(pplace), free(ox0), free(oy0), free(ox1), free(oy1), free(ozlo), free(ozhi);
+    pinfo = NULL, pplace = NULL, ox0 = oy0 = ox1 = oy1 = NULL, ozlo = ozhi = NULL;
+    pinfo_room = 0;
 }
 
 /* among the blended (not adding) pieces only, in the places they hold: those that add keep theirs */
@@ -1959,12 +2121,16 @@ static void order_fix(const RD_FRAME* f) {
     uint64_t t0 = now_us();
     (void)f;
     if (npieces > pinfo_room) {
-        free(pinfo), free(pplace);
+        size_t room;
+        order_free();
         pinfo_room = npieces + npieces / 2;
-        pinfo = malloc(sizeof *pinfo * (size_t)pinfo_room);
-        pplace = malloc(sizeof(int) * (size_t)pinfo_room);
-        if (pinfo == NULL || pplace == NULL) {
-            pinfo_room = 0;
+        room = (size_t)pinfo_room + ORDER_PAD;
+        pinfo = malloc(sizeof *pinfo * room), pplace = malloc(sizeof(int) * room);
+        ox0 = calloc(room, sizeof *ox0), oy0 = calloc(room, sizeof *oy0);
+        ox1 = calloc(room, sizeof *ox1), oy1 = calloc(room, sizeof *oy1);
+        ozlo = calloc(room, sizeof *ozlo), ozhi = calloc(room, sizeof *ozhi);
+        if (!pinfo || !pplace || !ox0 || !oy0 || !ox1 || !oy1 || !ozlo || !ozhi) {
+            order_free();
             return;
         }
     }
@@ -1972,10 +2138,11 @@ static void order_fix(const RD_FRAME* f) {
         const PIECE* q = &pieces[pidx[i]];
         if (!q->adds) {
             PINFO* p = &pinfo[n];
-            p->zlo = q->zlo, p->zhi = q->zhi;
+            ozlo[n] = zkey(q->zlo), ozhi[n] = zkey(q->zhi);
             p->piece = pidx[i];
             p->moved = p->plane = 0;
-            p->level = q->zlo == q->zhi;
+            p->level = ozlo[n] == ozhi[n];
+            make_bounds(n);
             pplace[n++] = i;
         }
     }
@@ -1984,10 +2151,14 @@ static void order_fix(const RD_FRAME* f) {
     for (i = 0; i < n - 1 && budget > 0; i++) {
         PINFO* p = &pinfo[i];
         int end = i + ORDER_WINDOW < n - 1 ? i + ORDER_WINDOW : n - 1;
-        for (j = i + 1; j <= end; j++) {
-            PINFO* q = &pinfo[j];
+        unsigned mask = sift(i) & ((1u << (end - i)) - 1u);   /* bit b: place i + 1 + b, up to end */
+        while (mask != 0) {
+            PINFO* q;
             int ok;
-            if ((p->level & q->level) || q->zlo > p->zhi || q->zhi < p->zlo || !in_front(p, q)) {
+            j = i + 1 + __builtin_ctz(mask);
+            mask &= mask - 1u;
+            q = &pinfo[j];
+            if (!in_front_exact(p, q)) {
                 continue;
             }
             if (p->moved >= 3 || --budget <= 0) {
@@ -1995,7 +2166,7 @@ static void order_fix(const RD_FRAME* f) {
             }
             /* p after q: not past one between that p lies behind */
             for (ok = 1, k = i + 1; k < j && ok; k++) {
-                ok = !in_front(&pinfo[k], p);
+                ok = !front_at(k, i);
             }
             if (ok) {
                 p->moved++;
@@ -2006,7 +2177,7 @@ static void order_fix(const RD_FRAME* f) {
             }
             /* or q before p: not before one between that lies behind q */
             for (ok = 1, k = i + 1; k < j && ok; k++) {
-                ok = !in_front(q, &pinfo[k]);
+                ok = !front_at(j, k);
             }
             if (ok) {
                 q->moved++;
@@ -2044,6 +2215,92 @@ static void add_pieces(VBUF* o, const RD_FRAME* f, int from, int to) {
 }
 
 static void vring_next(void);
+
+/* ASPECT_RATIO=WIDE: a stage's sky is a plane facing the camera far behind everything (a quad at one 1/w, far below
+   any model's), made as wide as the 4:3 screen and a little more: the wider screen showed the background colour past
+   its side. Those far level triangles of the opaque list, taken together, stretched across about their middle until
+   they reach the wide screen's sides; a far plane, so the stretch shows as no more than a slightly wider sky */
+#define BACKDROP_Z 0.0001f      /* 1/w: farther than 10000 */
+/* a triangle of the far sky: farther than BACKDROP_Z, its corners at about one depth (to within 3%: a sky plane can
+   lean a little, stage 0's by 1% across the screen) */
+static int far_level(const RD_TRI* t) {
+    float z = t->v[0].z, e = z * 0.03f;
+    return z > 0.0f && z < BACKDROP_Z && fabsf(t->v[1].z - z) <= e && fabsf(t->v[2].z - z) <= e;
+}
+static void wide_backdrop(const RD_FRAME* cf) {
+    enum { LAYERS = 8, FAR_MAX = 512 };
+    static int logged, last_n;
+    static uint16_t far_i[FAR_MAX];
+    static uint8_t far_m[FAR_MAX];
+    struct { float z, lo, hi, c, k; int n, state; } ly[LAYERS];
+    RD_FRAME* f = (RD_FRAME*)cf;    /* the frame is the render thread's now */
+    RD_TRI* tris = f->tris[RD_OPAQUE];
+    float need_lo = game_x0 - 2.0f, need_hi = game_x0 + game_w + 2.0f;
+    int i, j, m, nl = 0, n = 0, any = 0, ntris = f->ntris[RD_OPAQUE];
+    if (aspect_mode != ASPECT_WIDE) {
+        return;
+    }
+    /* the far level triangles by their state and depth: each plane its own layer (stage 13's sky and the plain band
+       under it, 1% apart, apart); one walk, the few found kept for the stretch */
+    for (i = 0; i < ntris; i++) {
+        const RD_TRI* t = &tris[i];
+        float z = t->v[0].z;
+        if (!(z < BACKDROP_Z) || !far_level(t)) {
+            continue;
+        }
+        for (m = 0; m < nl && (fabsf(ly[m].z - z) > ly[m].z * 0.03f || (ly[m].state != t->state &&
+                                            !rd_same_state(&f->states[ly[m].state], &f->states[t->state]))); m++) {
+        }
+        if (m == nl) {
+            if (nl == LAYERS) {
+                continue;
+            }
+            ly[nl].z = z, ly[nl].lo = 1e9f, ly[nl].hi = -1e9f, ly[nl].n = 0, ly[nl].k = 1.0f, ly[nl].state = t->state;
+            nl++;
+        }
+        for (j = 0; j < 3; j++) {
+            ly[m].lo = t->v[j].x < ly[m].lo ? t->v[j].x : ly[m].lo;
+            ly[m].hi = t->v[j].x > ly[m].hi ? t->v[j].x : ly[m].hi;
+        }
+        ly[m].n++;
+        if (n < FAR_MAX) {
+            far_i[n] = (uint16_t)i, far_m[n] = (uint8_t)m;
+            n++;
+        }
+    }
+    /* only a plane that already spans the 4:3 screen (far things of their own, a moon, some far pieces, are left) */
+    for (m = 0; m < nl; m++) {
+        float lo = ly[m].lo, hi = ly[m].hi, c = 0.5f * (lo + hi), k, k2;
+        if (ly[m].n > 64 || lo > 40.0f || hi < 600.0f || (lo <= need_lo && hi >= need_hi)) {
+            continue;
+        }
+        k = lo > need_lo && c > lo ? (c - need_lo) / (c - lo) : 1.0f;     /* short of the left side */
+        k2 = hi < need_hi && hi > c ? (need_hi - c) / (hi - c) : 1.0f;    /* short of the right */
+        k = k2 > k ? k2 : k;
+        ly[m].k = k > 1.25f ? 1.25f : k;
+        ly[m].c = c;
+        any = 1;
+    }
+    if (vita_debug && n != last_n && n >= 2 && logged < 40) {     /* each new set of far layers, taken or not */
+        logged++;
+        for (m = 0; m < nl; m++) {
+            if (ly[m].n >= 2) {
+                host_log("vgl: far layer %d: %d triangles at 1/w %.7f, x %.1f..%.1f: stretched %.3f", m, ly[m].n,
+                         ly[m].z, ly[m].lo, ly[m].hi, ly[m].k);
+            }
+        }
+    }
+    last_n = n;
+    for (i = 0; any && i < n; i++) {
+        RD_TRI* t = &tris[far_i[i]];
+        m = far_m[i];
+        if (ly[m].k != 1.0f) {
+            for (j = 0; j < 3; j++) {
+                t->v[j].x = ly[m].c + (t->v[j].x - ly[m].c) * ly[m].k;
+            }
+        }
+    }
+}
 
 static void prepare(const VFRAME* v) {
     const RD_FRAME* f = v->f;
@@ -2101,9 +2358,13 @@ static void prepare(const VFRAME* v) {
     }
     /* the translucent list's first steps on the cutting thread meanwhile */
     int pre_away = cut_go_ready() && f->ntris[RD_TRANS] >= 256;
-    if (pre_away) {
-        cut_run(2, f, 0, 0);
+    if (trans_away < 0) {
+        trans_away = getenv("MVC2_TRANS_AWAY") == NULL || atoi(getenv("MVC2_TRANS_AWAY")) != 0;
     }
+    if (pre_away) {
+        cut_run(trans_away ? 4 : 2, f, 0, 0);
+    }
+    wide_backdrop(f);
     for (l = 0; l < RD_TRANS; l++) {
         for (i = 0; i < f->ntris[l]; i++) {
             const RD_TRI* t = &f->tris[l][i];
@@ -2119,10 +2380,15 @@ static void prepare(const VFRAME* v) {
     q2 = now_us();
     if (pre_away) {
         cut_wait();
+        if (trans_away) {
+            cut_us[2] += now_us() - q2;     /* all of it done there: what the render thread waited */
+        }
     } else {
         trans_pre(f);
     }
-    trans_post(f);
+    if (!pre_away || !trans_away) {
+        trans_post(f);
+    }
     q3 = now_us();
     if (pkey_room && cut_go >= 0 && npieces >= 512) {
         /* the second half on the cutting thread, into its own arrays, then appended: the batches as one thread
@@ -2164,7 +2430,8 @@ static void prepare(const VFRAME* v) {
     }
     t1 = now_us();
     perf.prep_us += t1 - t0;
-    if (t1 - t0 > CUT_HEAVY_US || cut_capped) {
+    cut_heavy_run = t1 - t0 > CUT_HEAVY_US || t1 - t0 + last_draw_us > CUT_BUSY_US ? cut_heavy_run + 1 : 0;
+    if (cut_heavy_run >= 2 || (cut_capped && t1 - t0 + last_draw_us > CUT_KEEP_US)) {
         cut_hold = CUT_HOLD;
     } else if (cut_hold > 0) {
         cut_hold--;
@@ -3615,6 +3882,7 @@ static int render_main(SceSize args, void* argp) {
         want |= __sync_fetch_and_and(&requests, 0);
         draw_frame();
         td = now_us();
+        last_draw_us = td - tp;
         if (gpu_time_left > 0) {
             uint64_t g0 = now_us(), g;
             glFinish();

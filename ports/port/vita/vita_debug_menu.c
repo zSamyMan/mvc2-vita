@@ -6,6 +6,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <psp2/ctrl.h>
 #include "vita_debug_menu.h"
 
@@ -24,6 +25,15 @@ int host_dbg_take(void) {
 }
 
 int host_dbg_stage(void) {
+    static int read;
+    if (!read) {
+        /* MVC2_STAGE=n (testing): the stage the menu starts with, so a run can go straight to one stage */
+        const char* e = getenv("MVC2_STAGE");
+        read = 1;
+        if (e != NULL && atoi(e) >= 0 && atoi(e) <= 16) {
+            port_dbg_stage = atoi(e);
+        }
+    }
     return port_dbg_stage;
 }
 
@@ -60,7 +70,7 @@ static void where(char* buf, int n) {
 extern void rd_vgl_overlay_toggle(void);
 extern int rd_vgl_overlay_shown(void);
 
-enum { IT_LIFE, IT_CPU1, IT_GAUGE, IT_STAGE, IT_BOSS, IT_STAFF, IT_LOGO, IT_ATTRACT, IT_OVERLAY, IT_CLOSE, ITEMS };
+enum { IT_LIFE, IT_CPU1, IT_GAUGE, IT_STAGE, IT_SELECT, IT_BOSS, IT_STAFF, IT_LOGO, IT_ATTRACT, IT_OVERLAY, IT_CLOSE, ITEMS };
 
 static int open, sel;
 static unsigned prev;
@@ -89,6 +99,9 @@ static void line_of(int i, char* buf, int n) {
         } else {
             snprintf(buf, n, "NEXT FIGHT'S STAGE  < %2d >", port_dbg_stage);
         }
+        break;
+    case IT_SELECT:
+        snprintf(buf, n, "BACK TO THE SELECT (APPLY STAGE)");
         break;
     case IT_BOSS:
         snprintf(buf, n, "NEXT FIGHT: ABYSS");
@@ -168,6 +181,10 @@ static void act(int i, int dir) {
                                                only: forcing one mid-fight crashed) */
         port_dbg_stage = port_dbg_stage < -1 ? 16 : port_dbg_stage > 16 ? -1 : port_dbg_stage;
         break;
+    case IT_SELECT:
+        port_dbg_request(1, 0);
+        snprintf(note, sizeof note, "TO THE SELECT (IN A GAME ONLY)");
+        break;
     case IT_BOSS:
         port_dbg_request(2, 0);
         snprintf(note, sizeof note, "THE NEXT ARCADE FIGHT IS ABYSS");
@@ -202,6 +219,7 @@ int dbg_menu_poll(unsigned raw) {
     prev = raw;
     if ((raw & combo) == combo && (edge & combo)) {
         open = !open;
+        sel = 0;    /* always from its first line: a test's presses land where they mean to */
         note[0] = 0;
         version++;
         return 1;

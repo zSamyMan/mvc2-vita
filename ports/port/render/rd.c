@@ -188,10 +188,63 @@ static double area(const RD_VTX* a, const RD_VTX* b, const RD_VTX* c) {
     return ((double)b->x - a->x) * ((double)c->y - a->y) - ((double)b->y - a->y) * ((double)c->x - a->x);
 }
 
+/* ASPECT_RATIO=WIDE: the stage's models (host_wide_stage on, from the game's stage draws) made wider about the
+   world's x 0, the more the farther behind the players' plane (z 0) they lie: a far band or a wall's end that stopped
+   short of the wider screen's side reaches past it. In the world, not on the screen: a corner's x from its own world x
+   (its x on the screen less the camera's), so the widening is still as the camera moves and every depth scrolls
+   as fast as before; nothing seen slides or stretches with the camera, and the players' plane is as it was. The
+   camera looks down -z there (eye.z from the plane, F its focal length in the game's pixels) */
+static struct {
+    int on;
+    float xe, ez;
+} wide_stage;
+/* the widening by depth behind the players' plane: WIDE_STAGE_MID reached by WIDE_STAGE_D0 and kept the same as far
+   as WIDE_STAGE_D1, then growing by WIDE_STAGE_FAR more to WIDE_STAGE_D2. A widening the same at every depth is the
+   world made wider: the stage then looks as it does from a camera a little nearer its middle, stretched as a whole,
+   every layer of a model built of layers at different depths still lined up. Widened more with depth, those layers
+   parted (stage 4's tree, the clock tower: 4 to 10% by depth); flat at 3% from 400 the ends fell short again (stage
+   4's left wall, the clock tower's corners) and the tree, nearer than 400, still parted in the rise. So: the rise
+   kept to the floor by the players (to 60: the clock tower's right hall, near, fell a corner short at 150 and 8%),
+   the middle as wide as the ends need (9%), the far bands alone more (stage 1's mesas,
+   9100 behind, ending at x 693 at the right wall: 16%, 70 px more; 13.5% left a pixel) */
+#define WIDE_STAGE_MID 0.09f
+#define WIDE_STAGE_FAR 0.07f
+#define WIDE_STAGE_D0 60.0f
+#define WIDE_STAGE_D1 7000.0f
+#define WIDE_STAGE_D2 9000.0f
+#define WIDE_STAGE_F 812.3573f  /* 320 / tan(43 / 2 degrees): fov_x's, and the players' plane's distance */
+void host_wide_stage(int on, float xe, float ez) {
+    wide_stage.on = on, wide_stage.xe = xe, wide_stage.ez = ez;
+}
+static const RD_VTX* widen(const RD_VTX* v, int n, RD_VTX* out) {
+    int i;
+    for (i = 0; i < n; i++) {
+        float z = v[i].z, d;
+        out[i] = v[i];
+        if (!(z > 0.0f && z < 3.0e38f)) {
+            continue;
+        }
+        d = 1.0f / z - wide_stage.ez;    /* behind the players' plane */
+        if (d > 0.0f) {
+            float s0 = 320.0f - WIDE_STAGE_F * wide_stage.xe * z;    /* the world's x 0 at its depth */
+            float k = d < WIDE_STAGE_D0 ? WIDE_STAGE_MID / WIDE_STAGE_D0 * d : WIDE_STAGE_MID;
+            if (d > WIDE_STAGE_D1) {
+                k += d < WIDE_STAGE_D2 ? WIDE_STAGE_FAR / (WIDE_STAGE_D2 - WIDE_STAGE_D1) * (d - WIDE_STAGE_D1) : WIDE_STAGE_FAR;
+            }
+            out[i].x = v[i].x + k * (v[i].x - s0);
+        }
+    }
+    return out;
+}
+
 void rd_strip(const RD_STATE* s, const RD_VTX* v, int n) {
     int st, i, added = 0;
     if (rd_discard || (st = add_state(s)) < 0) {
         return;
+    }
+    static RD_VTX wv[256];     /* the game's thread alone draws */
+    if (wide_stage.on && n <= 256) {
+        v = widen(v, n, wv);
     }
     for (i = 2; i < n; i++) {
         /* one winding for the whole strip */
@@ -232,6 +285,10 @@ void rd_quad(const RD_STATE* s, const RD_VTX* v) {
     int st, first;
     if (rd_discard || (st = add_state(s)) < 0) {
         return;
+    }
+    RD_VTX wv[4];
+    if (wide_stage.on) {
+        v = widen(v, 4, wv);
     }
     if (rd_snap_x && v[0].x == v[3].x && v[1].x == v[2].x) {
         /* each side to the first column whose centre is at or past it */

@@ -370,15 +370,46 @@ void scr_work_init( void )
 /****************************************************************/
 /*			The projection and the camera's view				*/
 /****************************************************************/
+#ifdef HOST_PORT
+/* ASPECT_RATIO=WIDE: the screen shows host_wide_side_x( 1 ) past each side of the game's 640, and at a wall the fight's
+   camera stops with its 4:3 edge on the stage's end, so the wider screen showed past it, where the stage has no model
+   (its background colour). The camera drawn with is kept inside the stage by up to that much: the game's own (the
+   players' bounds, the effects' places) is unchanged, and its 4:3 view always lies inside the one drawn. The eye
+   moves with it (a camera stopping sooner, its parallax its own; a shift of the projection instead slid the far
+   layers against the near ones). Where a stage's model still ends short of the wider screen, rd_vgl's wide_fill
+   mirrors its end behind everything */
+Float scr_wide_dx( void )
+{
+	Float w = host_wide_side_x( 1 ), ex = scr_work.eye[0].x, dx = 0.0f ;
+
+	if( w == 0.0f || scr_work.stage_right - scr_work.stage_left < 2.0f * ( 320.0f + w ) ) return 0.0f ;
+	if( ex + 320.0f + w > scr_work.stage_right ) dx = scr_work.stage_right - ( 320.0f + w ) - ex ;
+	if( scr_work.stage_left > ex - 320.0f - w ) dx = scr_work.stage_left + ( 320.0f + w ) - ex ;
+	if( dx > w ) dx = w ;
+	if( dx < -w ) dx = -w ;
+	return dx ;
+}
+
+/* ASPECT_RATIO=WIDE: the stage's models drawn between scr_wide_stage( 1 ) and ( 0 ) made wider in the world, the more
+   the farther behind the players' plane (rd.c's host_wide_stage), where a far band or a wall's end stopped short of
+   the wider screen's side: with the camera drawn with (the eye as scr_matrix_set has it) */
+extern void host_wide_stage( int on, Float xe, Float ez ) ;
+void scr_wide_stage( int on )
+{
+	host_wide_stage( on && host_wide_side_x( 1 ) != 0.0f, scr_work.eye[0].x + scr_wide_dx(), scr_work.eye[0].z ) ;
+}
+#endif
+
 void scr_matrix_set( void )
 {
 	VEC3 eye ;
 	VEC3 obj ;
+	Float dx = scr_wide_dx() ;
 
-	eye.x = scr_work.eye[0].x ;
+	eye.x = scr_work.eye[0].x + dx ;
 	eye.y = scr_work.eye[0].y ;
 	eye.z = scr_work.eye[0].z ;
-	obj.x = scr_work.target[0].x ;
+	obj.x = scr_work.target[0].x + dx ;
 	obj.y = scr_work.target[0].y ;
 	obj.z = scr_work.target[0].z ;
 	nlMatrixMode( 3 ) ;
@@ -399,11 +430,12 @@ void scr_far_matrix_set( void )
 {
 	VEC3 eye ;
 	VEC3 obj ;
+	Float dx = scr_wide_dx() ;
 
-	eye.x = scr_work.eye[0].x * 0.1f ;
+	eye.x = ( scr_work.eye[0].x + dx ) * 0.1f ;
 	eye.y = scr_work.eye[0].y * 0.1f ;
 	eye.z = scr_work.eye[0].z * 0.1f ;
-	obj.x = scr_work.target[0].x * 0.1f ;
+	obj.x = ( scr_work.target[0].x + dx ) * 0.1f ;
 	obj.y = scr_work.target[0].y * 0.1f ;
 	obj.z = scr_work.target[0].z * 0.1f ;
 	nlMatrixMode( 3 ) ;

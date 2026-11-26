@@ -8,6 +8,11 @@ extern void scr_matrix_set( void ) ;	/* the camera for the stage */
 extern void scr_far_matrix_set( void ) ;	/* the camera for the far stage */
 extern void scr_2d_matrix_set( void ) ;	/* the camera for the front */
 extern void scr_matrix_set3( void ) ;
+#ifdef HOST_PORT
+extern void scr_wide_stage( int on ) ;	/* ASPECT_RATIO=WIDE: the stage's models drawn on, made wider in the world */
+#else
+#define scr_wide_stage( on )
+#endif
 extern void sel_mes_disp( void ) ;
 extern void spr_mark_disp( void ) ;
 extern int sprite_disp( PLAYER_WORK *w ) ;
@@ -254,7 +259,9 @@ void disp_all( void )
 	if( Sys->heart_step > 1 ) return ;
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
+	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
+	scr_wide_stage( 0 ) ;
 	scr_far_matrix_set() ;
 	obj_calc_list( 7 ) ;
 	obj_disp_list( 7 ) ;
@@ -283,7 +290,9 @@ void disp_front_stage( void )
 	if( Sys->heart_step > 1 ) return ;
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
+	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
+	scr_wide_stage( 0 ) ;
 }
 
 /****************************************************************/
@@ -328,7 +337,9 @@ void disp_front_stage2( void )
 	if( Sys->heart_step > 1 ) return ;
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
+	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
+	scr_wide_stage( 0 ) ;
 }
 
 /****************************************************************/
@@ -368,7 +379,9 @@ void disp_stage_front( void )
 {
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
+	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
+	scr_wide_stage( 0 ) ;
 	scr_2d_matrix_set() ;
 	obj_calc_list( 11 ) ;
 	obj_disp_list( 11 ) ;
@@ -581,7 +594,9 @@ static void stage_disp( void )
 	nlPushMatrix( 0 ) ;
 	nlUnitMatrix() ;
 	stage_fade_set() ;
+	scr_wide_stage( 1 ) ;
 	nlObjPutUseViewMatrix( obj_stg->obj[0] ) ;
+	scr_wide_stage( 0 ) ;
 	nlPopMatrix( 1 ) ;
 }
 
@@ -596,7 +611,9 @@ static void stage_obj_disp( void )
 {
 	scr_matrix_set() ;
 	obj_calc_list( 5 ) ;
+	scr_wide_stage( 1 ) ;
 	obj_disp_list( 5 ) ;
+	scr_wide_stage( 0 ) ;
 }
 
 /*==============================================================*/
@@ -604,7 +621,9 @@ static void stage_obj2_disp( void )
 {
 	scr_matrix_set() ;
 	obj_calc_list( 6 ) ;
+	scr_wide_stage( 1 ) ;
 	obj_disp_list( 6 ) ;
+	scr_wide_stage( 0 ) ;
 }
 
 /*==============================================================*/
