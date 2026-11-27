@@ -173,7 +173,6 @@ typedef struct {
     uint64_t wait_us;           /* the game, waiting for the render thread to give a frame back */
     uint64_t prep_us, tex_us, gl_us, swap_us, frame_us;
     unsigned tris, batches, uploads, upload_kb, binds;
-    unsigned up_sub, up_pool, up_made;  /* uploads written into a texture it had, into one from the pool, into a new one */
     uint64_t slow_total, slow[6];
     uint64_t part_us[4], part_worst[4];     /* prepare's: depth table, opaque and punch, translucent cut and sort, add */
     unsigned last_vcount;
@@ -241,10 +240,6 @@ static void perf_report(int now) {
              order_checks / n, order_planes / n, order_adds / n, order_us / 1000.0 / n, order_init_us / 1000.0 / n);
     guard_cuts = cut_count = order_moves = order_checks = order_planes = order_adds = 0;
     order_us = order_init_us = 0;
-    if (perf.uploads > 0) {
-        host_log("vgl: uploads: %u into their own texture, %u into a pooled one, %u into a new one", perf.up_sub,
-                 perf.up_pool, perf.up_made);
-    }
     host_log("vgl: translucent list's steps a frame: info %.2f, bounds and cuts %.2f, sort %.2f, order %.2f ms (%u tris; "
              "%u deep, %u shallow, %u candidates; index %.2f, pieces %.2f, waiting for the cutting thread %.2f ms)", tl_us[0] / 1000.0 / n, tl_us[1] / 1000.0 / n, tl_us[2] / 1000.0 / n,
              tl_us[3] / 1000.0 / n, (unsigned)(tl_us[4] / n), (unsigned)(cut_stats[0] / n), (unsigned)(cut_stats[1] / n),
@@ -600,48 +595,6 @@ static uint64_t frame_up_us;
 static unsigned frame_up_no;
 static unsigned tex_frame_us = 1;
 
-/*
- * GL textures given back (a slot's texture of a size it no longer has, a slot let go) kept by their size and format
- * for another slot of that size, once the GPU is done with them (6 frames): a new texture is GPU memory taken and
- * filled whole by vitaGL, a sprite tile changing size or a new one (a hyper's finish: a hundred a frame) cost about
- * 3 ms a frame of them; one from here is written in place
- */
-#define POOL_MOST 1536
-static struct {
-    GLuint id;
-    uint16_t w, h;
-    uint8_t format, levels;
-    uint32_t since;             /* render_no it was last drawn with */
-} tpool[POOL_MOST];
-static int npool;
-
-static void pool_put(GLuint id, int w, int h, int format, int levels, uint32_t since) {
-    if (id == 0) {
-        return;
-    }
-    if (npool == POOL_MOST) {
-        glDeleteTextures(1, &tpool[0].id);  /* the oldest given back */
-        memmove(tpool, tpool + 1, sizeof tpool[0] * (POOL_MOST - 1));
-        npool--;
-    }
-    tpool[npool].id = id, tpool[npool].w = (uint16_t)w, tpool[npool].h = (uint16_t)h;
-    tpool[npool].format = (uint8_t)format, tpool[npool].levels = (uint8_t)levels, tpool[npool].since = since;
-    npool++;
-}
-
-static GLuint pool_take(int w, int h, int format, int levels) {
-    int i;
-    for (i = 0; i < npool; i++) {
-        if (tpool[i].w == w && tpool[i].h == h && tpool[i].format == format && tpool[i].levels == levels &&
-            render_no - tpool[i].since > 5) {
-            GLuint id = tpool[i].id;
-            tpool[i] = tpool[--npool];
-            return id;
-        }
-    }
-    return 0;
-}
-
 static void tex_upload(TEX* e, const RD_TEXTURE* t) {
     GLenum fmt = GL_RGBA, type = GL_UNSIGNED_SHORT_5_5_5_1;
     int k, bytes = 0;
@@ -678,42 +631,18 @@ static void tex_upload(TEX* e, const RD_TEXTURE* t) {
         if (pick >= 0) {
             e->ring_at = (uint8_t)pick, sub = 1;
         } else if (e->ring_n < (int)(sizeof e->ring / sizeof e->ring[0])) {
-            GLuint id = e->hwpal ? 0 : pool_take(t->width, t->height, t->format, t->levels);
             e->ring_at = e->ring_n++;
-            if (id != 0) {
-                e->ring[e->ring_at] = id, sub = 2;
-            } else {
-                glGenTextures(1, &e->ring[e->ring_at]);
-            }
+            glGenTextures(1, &e->ring[e->ring_at]);
         }
         e->id = e->ring[e->ring_at];
     } else {
-        /* another size (or none yet): the slot's textures to the pool (by the size they have), one of the new size
-           taken from it or made */
-        GLuint id;
-        int j;
-        for (j = 0; j < e->ring_n; j++) {
-            if (e->hwpal) {
-                glDeleteTextures(1, &e->ring[j]);
-            } else {
-                pool_put(e->ring[j], e->w, e->h, e->format, e->levels, e->ring_used[j] > e->used ? e->ring_used[j] : e->used);
-            }
+        if (e->ring_n > 1) {
+            glDeleteTextures(e->ring_n - 1, &e->ring[1]);   /* another size: the turns start again */
         }
-        id = pool_take(t->width, t->height, t->format, t->levels);
-        if (id != 0) {
-            e->ring[0] = id, sub = 2;
-        } else {
+        if (e->ring_n == 0) {
             glGenTextures(1, &e->ring[0]);
         }
-        memset(e->ring_used, 0, sizeof e->ring_used);
         e->ring_n = 1, e->ring_at = 0, e->id = e->ring[0];
-    }
-    if (sub == 1) {
-        perf.up_sub++;
-    } else if (sub == 2) {
-        perf.up_pool++;
-    } else {
-        perf.up_made++;
     }
     e->wrap_s = e->wrap_t = e->filter = -1;
     glBindTexture(GL_TEXTURE_2D, e->id);
@@ -808,14 +737,7 @@ static void tex_sweep(void) {
     for (i = at; i < end; i++) {
         TEX* t = &texes[i];
         if (t->key != NULL && t->key != (const RD_TEXTURE*)1 && render_no - t->used > TEX_IDLE) {
-            int j;
-            for (j = 0; j < t->ring_n; j++) {
-                if (t->hwpal) {
-                    glDeleteTextures(1, &t->ring[j]);
-                } else {
-                    pool_put(t->ring[j], t->w, t->h, t->format, t->levels, t->used);
-                }
-            }
+            glDeleteTextures(t->ring_n, t->ring);
             memset(t, 0, sizeof *t);
             t->key = (const RD_TEXTURE*)1;
         }

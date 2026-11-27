@@ -553,7 +553,7 @@ void vita_early_init(void) {
     tty_on = getenv("MVC2_TTY") != NULL && atoi(getenv("MVC2_TTY")) != 0;
     say("vita: renderer %s, soft picture %s, texture skip %s", getenv("MVC2_RENDERER") ? getenv("MVC2_RENDERER") : "gpu",
         getenv("MVC2_RDQUALITY") ? getenv("MVC2_RDQUALITY") : "exact", getenv("MVC2_TEX_SKIP"));
-    /* CLOCKS (env.txt): 333 (the default, the Vita's own profile: ARM 333, GPU 166, crossbar 111 MHz; the bus stays at 222) or 444
+    /* CLOCKS (env.txt): 333 (the default: ARM 333, GPU 222, crossbar 111 MHz, bus 166) or 444
        (ARM 444, bus 222, GPU 222, crossbar 166: more heat and battery, for comparison) */
     if (getenv("CLOCKS") != NULL && atoi(getenv("CLOCKS")) == 444) {
         scePowerSetArmClockFrequency(444);
@@ -561,9 +561,11 @@ void vita_early_init(void) {
         scePowerSetGpuClockFrequency(222);
         scePowerSetGpuXbarClockFrequency(166);
     } else {
+        /* the GPU at 222 (ARM, bus and crossbar the Vita's own): Abyss's triple hyper finish, its screen of large
+           translucent layers, kept the GPU past a frame's 16.7 ms at 166 (the swap waited up to 20 ms for it) */
         scePowerSetArmClockFrequency(333);
         scePowerSetBusClockFrequency(166);
-        scePowerSetGpuClockFrequency(166);
+        scePowerSetGpuClockFrequency(222);
         scePowerSetGpuXbarClockFrequency(111);
     }
     say("vita: clocks ARM %d, bus %d, GPU %d, crossbar %d MHz", scePowerGetArmClockFrequency(),

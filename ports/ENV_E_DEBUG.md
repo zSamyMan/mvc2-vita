@@ -9,7 +9,7 @@ ignorada (e anotada no `mvc2.log` como "left out"). Os ajustes internos do port 
 | Variável | Padrão | Descrição |
 |---|---|---|
 | `ASPECT_RATIO` | `WIDE` | `ORIGINAL`: 4:3 com as bordas ilustradas nas laterais. `STRETCHED`: 4:3 esticado para 16:9. `WIDE`: widescreen real, com a interface ajustada aos cantos. |
-| `CLOCKS` | `333` | `333`: perfil padrão do Vita (ARM 333, GPU 166, crossbar 111 MHz; barramento 166). `444`: ARM 444, barramento e GPU 222, crossbar 166. Esquenta mais e gasta mais bateria; serve para comparar. |
+| `CLOCKS` | `333` | `333`: ARM 333, GPU 222, crossbar 111 MHz, barramento 166 (a GPU acima dos 166 do perfil padrão do Vita, para os Hyper Combo Finish com muitas camadas transparentes). `444`: ARM 444, barramento e GPU 222, crossbar 166. Esquenta mais e gasta mais bateria; serve para comparar. |
 | `DEBUG_OPTIONS` | `1` | `1` liga as ferramentas de teste: log (`mvc2.log`), menu de debug, overlay, atalhos com SELECT (capturas, dumps, sequências), a imagem do renderizador por software junto de cada captura e as variáveis de teste abaixo. `0` desliga tudo isso: é a configuração de quem só vai jogar. |
 
 ## Variáveis de teste (só com `DEBUG_OPTIONS=1`)
