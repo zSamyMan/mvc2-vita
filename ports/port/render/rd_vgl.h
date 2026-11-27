@@ -14,6 +14,8 @@ void rd_vgl_present(void);
 /* asks the render thread for a picture (ux0:data/mvc_2/shots/) or the next frame's batches in the log */
 enum { RD_VGL_SHOT = 1, RD_VGL_DUMP = 2, RD_VGL_PERF = 4, RD_VGL_BURST = 8 };
 void rd_vgl_request(int what);
+/* the first start's screen while the disc's files are unpacked: 0 to 1000 as far as it has come; below 0 hides it */
+void rd_vgl_boot_progress(int permille);
 /* the overlay's figures: a thread's CPU share (by its id), the game's frame times from the front end */
 void rd_vgl_watch_thread(const char* name, int id);
 void rd_vgl_game_stats(float game_ms, float sound_ms, float worst_ms);

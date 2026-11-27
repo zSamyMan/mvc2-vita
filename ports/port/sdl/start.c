@@ -16,6 +16,9 @@
 #ifdef __vita__
 #include "vita_sys.h"
 #endif
+#ifdef MVC2_VITAGL
+#include "rd_vgl.h"
+#endif
 
 #define CONFIG "mvc2.cfg"
 
@@ -354,8 +357,11 @@ int pick_game(int argc, char** argv) {
 
 #ifdef MVC2_DC
 #ifndef __3DS__
-/* the window's title says how far it is, and the window keeps answering */
+/* the window's title says how far it is, and the window keeps answering (the Vita: its first start's screen) */
 static void unpack_progress(uint32_t done, uint32_t total) {
+#ifdef MVC2_VITAGL
+    rd_vgl_boot_progress(total > 0 ? (int)((uint64_t)done * 1000 / total) : 0);
+#endif
     static uint32_t shown = ~0u;
     uint32_t pct = total > 0 ? (uint32_t)((uint64_t)done * 100 / total) : 0;
     SDL_Window* w = SDL_GetKeyboardFocus();
@@ -386,7 +392,13 @@ static int unpack_disc(const char* dir) {
     ctr_unpack_screen(NULL);
 #else
     (void)image;
+#ifdef MVC2_VITAGL
+    rd_vgl_boot_progress(0);
+#endif
     err = dc_image_unpack(dir, unpack_progress);
+#ifdef MVC2_VITAGL
+    rd_vgl_boot_progress(-1);
+#endif
     if (SDL_GetKeyboardFocus() != NULL) {
         SDL_SetWindowTitle(SDL_GetKeyboardFocus(), "Marvel vs. Capcom 2");
     }

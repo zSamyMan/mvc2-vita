@@ -438,16 +438,25 @@ int vita_map_ram(void) {
 }
 
 /*
- * DEBUG_OPTIONS (env.txt, 0 or 1, 1 unless set): 0 turns off every tool made for testing, for a players' build: the
- * log (no mvc2.log, no stderr.txt, no log thread), the overlay, the pictures, dumps and bursts and their SELECT
- * keys, the frame trace, the profilers, the TTY, control.txt and the watchdog. Their own variables are dropped.
+ * env.txt takes only these. The player's: ASPECT_RATIO, CLOCKS, DEBUG_OPTIONS (0 or 1, 1 unless set: 0 turns off every
+ * tool made for testing, for a players' build: the log, the overlay, the pictures, dumps and bursts and their SELECT
+ * keys, the debug menu, the TTY and the watchdog). With DEBUG_OPTIONS=1 also the test runs' MVC2_STAGE, MVC2_BOSS and
+ * MVC2_TEST. Any other line is noted in the log and left out: the program's own settings keep their defaults, and the
+ * tools DEBUG_OPTIONS turns on are on with it (the software renderer's picture beside each capture)
  */
 int vita_debug = 1;
-static const char* const debug_vars[] = {
-    "MVC2_OVERLAY", "MVC2_SHOT", "MVC2_SHOT_SOFT", "MVC2_DUMP", "MVC2_BURST", "MVC2_TRACE", "MVC2_GPUTIME",
-    "MVC2_SNDPROF", "MVC2_TTY", "MVC2_CONTROL", "MVC2_TRACE_GD", "MVC2_SNDDBG", "MVC2_SNDLOG", "MVC2_FSX",
-    "MVC2_BOSS", "MVC2_TEST", "MVC2_STAGE",
-};
+static const char* const player_vars[] = { "ASPECT_RATIO", "CLOCKS", "DEBUG_OPTIONS" };
+static const char* const debug_vars[] = { "MVC2_STAGE", "MVC2_BOSS", "MVC2_TEST" };
+
+static int listed_in(const char* name, const char* const* list, int n) {
+    int i;
+    for (i = 0; i < n; i++) {
+        if (strcmp(name, list[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* MVC2_TEST=bits (testing only): 1 the computer's players at 1 vital, 2 the human's hyper gauge kept full, 4 a note of
    the computer's vital each second, 8 the human's vital kept full */
@@ -477,33 +486,50 @@ void vita_early_init(void) {
     int nenv = 0, i;
     sceIoMkdir("ux0:data", 0777);
     sceIoMkdir("ux0:data/mvc_2", 0777);
-    /* env.txt's NAME=value lines as environment variables (MVC2_SOUND, MVC2_RDQUALITY, MVC2_FRAMES...), as the
-       3DS reads them: a Vita app has no command line. Read before the log, which DEBUG_OPTIONS may turn off */
+    /* env.txt's NAME=value lines (a Vita app has no command line): the listed ones as environment variables. Read
+       before the log, which DEBUG_OPTIONS may turn off */
+    static char env_left[32][128];
+    int nleft = 0;
     {
         FILE* f = fopen(VITA_DATA_DIR "env.txt", "r");
+        static char names[32][64], values[32][128];
         char line[512];
-        while (f != NULL && fgets(line, sizeof line, f) != NULL) {
+        int n = 0;
+        while (f != NULL && fgets(line, sizeof line, f) != NULL && n < 32) {
             char* eq = strchr(line, '=');
             line[strcspn(line, "\r\n")] = 0;
             if (line[0] != '#' && eq != NULL) {
                 *eq = 0;
-                setenv(line, eq + 1, 1);
-                if (nenv < 32) {
-                    snprintf(env_lines[nenv++], sizeof env_lines[0], "%s=%s", line, eq + 1);
-                }
+                snprintf(names[n], sizeof names[0], "%s", line);
+                snprintf(values[n], sizeof values[0], "%s", eq + 1);
+                n++;
             }
         }
         if (f != NULL) {
             fclose(f);
         }
-    }
-    vita_debug = getenv("DEBUG_OPTIONS") == NULL || atoi(getenv("DEBUG_OPTIONS")) != 0;
-    if (!vita_debug) {
-        for (i = 0; i < (int)(sizeof debug_vars / sizeof debug_vars[0]); i++) {
-            unsetenv(debug_vars[i]);
+        for (i = 0; i < n; i++) {
+            if (strcmp(names[i], "DEBUG_OPTIONS") == 0) {
+                vita_debug = atoi(values[i]) != 0;
+            }
         }
+        for (i = 0; i < n; i++) {
+            int take = listed_in(names[i], player_vars, (int)(sizeof player_vars / sizeof player_vars[0])) ||
+                       (vita_debug && listed_in(names[i], debug_vars, (int)(sizeof debug_vars / sizeof debug_vars[0])));
+            if (take) {
+                setenv(names[i], values[i], 1);
+                if (nenv < 32) {
+                    snprintf(env_lines[nenv++], sizeof env_lines[0], "%s=%s", names[i], values[i]);
+                }
+            } else if (nleft < 32) {
+                snprintf(env_left[nleft++], sizeof env_left[0], "%s=%s", names[i], values[i]);
+            }
+        }
+    }
+    if (!vita_debug) {
         log_off = 1;
     } else {
+        setenv("MVC2_SHOT_SOFT", "1", 1);   /* each capture with the software renderer's picture of its frame */
         log_fd = sceIoOpen(VITA_DATA_DIR "mvc2.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
         /* what the front end writes to stderr itself (SDL's errors) */
         if (freopen(VITA_DATA_DIR "stderr.txt", "w", stderr) != NULL) {
@@ -514,6 +540,9 @@ void vita_early_init(void) {
     say("Marvel vs. Capcom 2 for the PS Vita, built " __DATE__ " " __TIME__);
     for (i = 0; i < nenv; i++) {
         say("vita: env.txt: %s", env_lines[i]);
+    }
+    for (i = 0; i < nleft; i++) {
+        say("vita: env.txt: %s left out (not one env.txt takes)", env_left[i]);
     }
     /* MVC2_RENDERER=soft: the software renderer at 320 by 240 with the nearest texel (about three times faster
        than exact); either way a texture loaded again in a frame from the same source is not read again */

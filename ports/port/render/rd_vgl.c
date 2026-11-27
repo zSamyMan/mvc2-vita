@@ -3566,6 +3566,135 @@ static void read_commands(void) {
     host_log("vgl: control.txt: %s", buf);
 }
 
+/* ---- the port's own pictures (app0:assets, from ports/tools/vita_assets.py): 960 by 544, RGB 565 ---- */
+
+#define PIC_W 960
+#define PIC_H 544
+
+/* a picture as a GL texture (0 when it could not be read) */
+static GLuint pic_load(const char* name) {
+    char path[96];
+    GLuint t = 0;
+    size_t n = (size_t)PIC_W * PIC_H * 2;
+    uint16_t* px = malloc(n);
+    FILE* f;
+    snprintf(path, sizeof path, "app0:assets/%s.565", name);
+    f = fopen(path, "rb");
+    if (px != NULL && f != NULL && fread(px, 1, n, f) == n) {
+        glGenTextures(1, &t);
+        glBindTexture(GL_TEXTURE_2D, t);
+        cur.tex = t;
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, PIC_W, PIC_H, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, px);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    } else {
+        host_log("vgl: picture %s not read", path);
+    }
+    if (f != NULL) {
+        fclose(f);
+    }
+    free(px);
+    return t;
+}
+
+/* a 1 by 1 texture of one colour (for a bar) */
+static GLuint pic_colour(uint8_t r, uint8_t g, uint8_t b) {
+    GLuint t;
+    uint16_t px = (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    cur.tex = t;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, &px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return t;
+}
+
+/* the screen's pixels x0..x1, y0..y1 (top down) from the texture's u0..u1, v0..v1 (0 to 1), opaque, over what is there;
+   the viewport and scissor left whole */
+static void pic_draw(GLuint tex, float tw, float th, float x0, float y0, float x1, float y1, float u0, float v0, float u1,
+                     float v1) {
+    static const float zero[4] = { 0, 0, 0, 0 }, decal[4] = { 0, 0, 0, 1 };
+    float size[4] = { 0, 0, tw, th };
+    float nx0 = x0 / SCREEN_W * 2 - 1, nx1 = x1 / SCREEN_W * 2 - 1, ny0 = 1 - y0 / SCREEN_H * 2, ny1 = 1 - y1 / SCREEN_H * 2;
+    const float xy[6][4] = { { nx0, ny0, u0, v0 }, { nx1, ny0, u1, v0 }, { nx0, ny1, u0, v1 },
+                             { nx0, ny1, u0, v1 }, { nx1, ny0, u1, v0 }, { nx1, ny1, u1, v1 } };
+    VTX q[6];
+    int i, op;
+    if (tex == 0) {
+        return;
+    }
+    memset(q, 0, sizeof q);
+    for (i = 0; i < 6; i++) {
+        q[i].x = xy[i][0], q[i].y = xy[i][1], q[i].z = 0.0f, q[i].w = 1.0f, q[i].u = xy[i][2], q[i].v = xy[i][3];
+        memcpy(q[i].clamp, no_clamp, sizeof no_clamp);
+        q[i].fw = 1.0f;
+        memset(q[i].base, 255, 4);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, SCREEN_W, SCREEN_H);
+    op = program_for(P_TEX + P_SHADE * 4);    /* decal */
+    use_program(op);
+    set_uniform(op, 0, progs[op].shade, decal);
+    set_uniform(op, 1, progs[op].fog, zero);
+    set_uniform(op, 2, progs[op].fog_color, zero);
+    set_uniform(op, 3, progs[op].misc, size);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    cur.tex = tex;
+    set_blend(0, RD_ONE, RD_ZERO);
+    set_depth(RD_ALWAYS, 0);
+    attribs(q);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+/* ASPECT_RATIO=ORIGINAL: the pillars beside the game's 4:3 drawn from Borders.png (its middle, where the game is,
+   transparent in the PNG, is not drawn) */
+static GLuint borders_tex;
+static void draw_borders(void) {
+    float r0 = view_x0 + view_w;
+    if (aspect_mode != ASPECT_ORIGINAL || borders_tex == 0) {
+        return;
+    }
+    pic_draw(borders_tex, PIC_W, PIC_H, 0, 0, view_x0, SCREEN_H, 0, 0, view_x0 / PIC_W, 1);
+    pic_draw(borders_tex, PIC_W, PIC_H, r0, 0, SCREEN_W, SCREEN_H, r0 / PIC_W, 0, 1, 1);
+}
+
+/* the first start's screen while the disc's files are unpacked (rd_vgl_boot_progress): First_boot.png, its black bar
+   filled in yellow from the left as far as the unpacking has come */
+#define BOOT_BAR_X0 45.0f   /* inside the picture's black bar (42 to 392, 240 to 270): a 3-pixel black frame kept */
+#define BOOT_BAR_X1 390.0f
+#define BOOT_BAR_Y0 243.0f
+#define BOOT_BAR_Y1 268.0f
+static volatile int boot_on, boot_permille;
+static GLuint boot_tex, boot_bar_tex;
+
+void rd_vgl_boot_progress(int permille) {
+    if (permille < 0) {
+        boot_on = 0;
+        return;
+    }
+    boot_permille = permille > 1000 ? 1000 : permille;
+    boot_on = 1;
+}
+
+static void draw_boot(void) {
+    float x1;
+    if (boot_tex == 0) {
+        boot_tex = pic_load("first_boot");
+        boot_bar_tex = pic_colour(250, 200, 20);
+    }
+    glViewport(0, 0, SCREEN_W, SCREEN_H);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    pic_draw(boot_tex, PIC_W, PIC_H, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 1, 1);
+    x1 = BOOT_BAR_X0 + (BOOT_BAR_X1 - BOOT_BAR_X0) * boot_permille / 1000.0f;
+    if (x1 > BOOT_BAR_X0) {
+        pic_draw(boot_bar_tex, 1, 1, BOOT_BAR_X0, BOOT_BAR_Y0, x1, BOOT_BAR_Y1, 0, 0, 1, 1);
+    }
+    vglSwapBuffers(GL_FALSE);
+}
+
 /* ---- the render thread ---- */
 
 static void draw_frame(void) {
@@ -3582,6 +3711,7 @@ static void draw_frame(void) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         gl_step("the clear", g0);
     }
+    draw_borders();
     glViewport((GLint)view_x0, 0, (GLsizei)view_w, SCREEN_H);
     /* the GXM clips only to its region: without the scissor a triangle past the game's sides is drawn into the
        pillars (and costs their pixels) */
@@ -3860,6 +3990,9 @@ static int render_main(SceSize args, void* argp) {
         control_start();
     }
     io_start();
+    if (aspect_mode == ASPECT_ORIGINAL) {
+        borders_tex = pic_load("borders");
+    }
     started_ok = 1;
     sceKernelSignalSema(sem_started, 1);
     perf.last_vcount = sceDisplayGetVcount();
@@ -3868,7 +4001,24 @@ static int render_main(SceSize args, void* argp) {
         uint64_t t0, t1, t2, tw = now_us(), tp, td, tend;
         unsigned vc_missed_now = 0;
         int want;
-        sceKernelWaitSema(sem_ready, 1, NULL);
+        int got = 0;
+        /* the first start's unpacking: its screen drawn about 30 times a second until the game's first frame */
+        while (boot_on && !got) {
+            SceUInt timeout = 33000;
+            if (sceKernelWaitSema(sem_ready, 1, &timeout) >= 0) {
+                got = 1;
+            } else {
+                draw_boot();
+            }
+        }
+        if (!got) {
+            sceKernelWaitSema(sem_ready, 1, NULL);
+        }
+        if (boot_tex != 0 && !boot_on) {
+            glDeleteTextures(1, &boot_tex);     /* the unpacking done: its picture's memory back */
+            glDeleteTextures(1, &boot_bar_tex);
+            boot_tex = boot_bar_tex = 0;
+        }
         t0 = now_us();
         v = vf[render_no & 1];
         render_no++;

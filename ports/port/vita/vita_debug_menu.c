@@ -70,7 +70,7 @@ static void where(char* buf, int n) {
 extern void rd_vgl_overlay_toggle(void);
 extern int rd_vgl_overlay_shown(void);
 
-enum { IT_LIFE, IT_CPU1, IT_GAUGE, IT_STAGE, IT_SELECT, IT_BOSS, IT_STAFF, IT_LOGO, IT_ATTRACT, IT_OVERLAY, IT_CLOSE, ITEMS };
+enum { IT_LIFE, IT_CPU1, IT_GAUGE, IT_STAGE, IT_BOSS, IT_STAFF, IT_LOGO, IT_ATTRACT, IT_OVERLAY, IT_CLOSE, ITEMS };
 
 static int open, sel;
 static unsigned prev;
@@ -94,14 +94,12 @@ static void line_of(int i, char* buf, int n) {
         snprintf(buf, n, "HYPER GAUGE FULL        %s", on_off(f & 2));
         break;
     case IT_STAGE:
+        /* one line: LEFT/RIGHT pick the stage, X applies it (to the character select, the next fight on it) */
         if (port_dbg_stage < 0) {
-            snprintf(buf, n, "NEXT FIGHT'S STAGE  < GAME'S >");
+            snprintf(buf, n, "STAGE  < GAME'S >     X: APPLY");
         } else {
-            snprintf(buf, n, "NEXT FIGHT'S STAGE  < %2d >", port_dbg_stage);
+            snprintf(buf, n, "STAGE  < %2d >         X: APPLY", port_dbg_stage);
         }
-        break;
-    case IT_SELECT:
-        snprintf(buf, n, "BACK TO THE SELECT (APPLY STAGE)");
         break;
     case IT_BOSS:
         snprintf(buf, n, "NEXT FIGHT: ABYSS");
@@ -177,13 +175,15 @@ static void act(int i, int dir) {
         host_test_flags_set(f ^ 2);
         break;
     case IT_STAGE:
-        port_dbg_stage += dir ? dir : 1;    /* LEFT/RIGHT or X: the stage the next fight loads (a fight's own loads
-                                               only: forcing one mid-fight crashed) */
-        port_dbg_stage = port_dbg_stage < -1 ? 16 : port_dbg_stage > 16 ? -1 : port_dbg_stage;
-        break;
-    case IT_SELECT:
-        port_dbg_request(1, 0);
-        snprintf(note, sizeof note, "TO THE SELECT (IN A GAME ONLY)");
+        if (dir != 0) {
+            port_dbg_stage += dir;      /* LEFT/RIGHT: the stage the next fight loads (a fight's own loads only:
+                                           forcing one mid-fight crashed) */
+            port_dbg_stage = port_dbg_stage < -1 ? 16 : port_dbg_stage > 16 ? -1 : port_dbg_stage;
+        } else {
+            port_dbg_request(1, 0);     /* X: to the character select, the next fight on that stage */
+            open = 0;                   /* closed: the select's buttons are the game's again */
+            snprintf(note, sizeof note, "TO THE SELECT (IN A GAME ONLY)");
+        }
         break;
     case IT_BOSS:
         port_dbg_request(2, 0);

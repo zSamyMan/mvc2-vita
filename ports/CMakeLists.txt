@@ -490,6 +490,11 @@ function(mvc2_executable TARGET)
         if(EXISTS ${PORT}/vita/shaders/pack.bin)
             list(APPEND VITA_ASSETS FILE ${PORT}/vita/shaders/pack.bin shaders/pack.bin)
         endif()
+        # the renderer's pictures (ports/tools/vita_assets.py makes each .565 from its PNG): ASPECT_RATIO=ORIGINAL's
+        # borders and the first start's unpacking screen
+        foreach(pic borders first_boot)
+            list(APPEND VITA_ASSETS FILE ${PORT}/vita/assets/${pic}.565 assets/${pic}.565)
+        endforeach()
         # the libraries' notices and licenses with every copy (vitaGL and vitaShaRK are LGPL-3.0, linked statically)
         list(APPEND VITA_ASSETS FILE ${CMAKE_CURRENT_SOURCE_DIR}/NOTICE.md licenses/NOTICE.md)
         foreach(lic GPL-3.0 LGPL-3.0 LGPL-2.1 math-neon-MIT)

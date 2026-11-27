@@ -16,8 +16,9 @@ image can be deleted after):
 | track 3 alone, raw or as an ISO        | `Marvel vs. Capcom 2 (USA) (Track 3).bin`, `mvc2.iso`   |
 
 Everything else the port keeps is in `ux0:data/mvc_2/` too: `mvc2.cfg`, the memory card's saves, the shaders it
-compiles (`shaders/pack.bin`) and, for testing, `env.txt` (`NAME=value` lines read as environment variables;
-`DEBUG_OPTIONS=0` turns off the testing tools: the overlay, the pictures, the log and their buttons).
+compiles (`shaders/pack.bin`) and `env.txt` (`NAME=value` lines: `ASPECT_RATIO`, `CLOCKS` and `DEBUG_OPTIONS`, whose
+`0` turns off the testing tools: the log, the debug menu, the overlay, the pictures and their buttons; see
+`ENV_E_DEBUG.md`).
 
 Sound: the AICA's own driver runs on an emulated ARM7 (translated to the Vita's own ARM code) with its DSP; the
 ADX music is decoded by the port.
