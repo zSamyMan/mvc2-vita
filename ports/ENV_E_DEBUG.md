@@ -55,9 +55,17 @@ A segunda linha do menu mostra onde o jogo está: modo, cena, estágio atual e n
 
 ## Primeira execução
 
-Na primeira vez que o port abre, os arquivos do disco são extraídos da imagem (CHD, GDI, CUE ou ISO) para
-`ux0:data/mvc_2/disc`. Durante a extração aparece a tela de primeira execução, com a barra de progresso enchendo em
-amarelo. Nas próximas execuções ela não aparece.
+Coloque a imagem do disco (USA: `.chd`, `.gdi` com as trilhas, `.cue` com os `.bin`, `.iso` ou só a trilha 3) em
+`ux0:data/mvc_2` ou em `ux0:data/mvc_2/disc`. Na primeira vez que o port abre, os arquivos do disco são extraídos dela
+para `ux0:data/mvc_2/disc` (uma imagem em `ux0:data/mvc_2` é antes movida para lá, sem cópia). Durante a extração aparece
+a tela de primeira execução, com a barra de progresso enchendo em amarelo. Terminada e conferida a extração, os
+arquivos da imagem são apagados: ficam só os arquivos extraídos (cerca de 210 MB). Nas próximas execuções a tela não
+aparece.
+
+Sem imagem nem arquivos extraídos, o port mostra a tela de aviso (onde colocar o dump) até ser fechado pelo botão PS.
+
+Para extrair no computador em vez do console, use `mvc2_extract` (`ports/tools/extract`) e copie a pasta gerada para
+`ux0:data/mvc_2/disc`.
 
 ## Scripts de teste no PC (`vita-tools`, via vita-agent)
 

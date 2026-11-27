@@ -491,8 +491,8 @@ function(mvc2_executable TARGET)
             list(APPEND VITA_ASSETS FILE ${PORT}/vita/shaders/pack.bin shaders/pack.bin)
         endif()
         # the renderer's pictures (ports/tools/vita_assets.py makes each .565 from its PNG): ASPECT_RATIO=ORIGINAL's
-        # borders and the first start's unpacking screen
-        foreach(pic borders first_boot)
+        # borders, the first start's unpacking screen and the no-data warning
+        foreach(pic borders first_boot warning)
             list(APPEND VITA_ASSETS FILE ${PORT}/vita/assets/${pic}.565 assets/${pic}.565)
         endforeach()
         # the libraries' notices and licenses with every copy (vitaGL and vitaShaRK are LGPL-3.0, linked statically)

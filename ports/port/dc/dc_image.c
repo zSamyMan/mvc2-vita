@@ -319,6 +319,86 @@ const char* dc_image_find(const char* dir) {
     return NULL;
 }
 
+/* the image's own files in dir: the image, and for a .gdi or .cue the track files it names (each once); how many */
+int dc_image_files(const char* dir, const char* image, char (*out)[256], int max) {
+    char line[1200], f[6][1100], path[2400];
+    FILE* s;
+    int n = 0, i, k;
+    if (max < 1) {
+        return 0;
+    }
+    snprintf(out[n++], 256, "%s", image);
+    if (!ends_with(image, ".gdi") && !ends_with(image, ".cue")) {
+        return n;
+    }
+    snprintf(path, sizeof path, "%s/%s", dir, image);
+    if ((s = fopen(path, "r")) == NULL) {
+        return n;
+    }
+    while (n < max && fgets(line, sizeof line, s) != NULL) {
+        const char* p = line;
+        const char* file = NULL;
+        if (ends_with(image, ".gdi")) {
+            for (i = 0; i < 6 && field(&p, f[i], sizeof f[i]) != NULL; i++) {
+            }
+            file = i >= 5 ? f[4] : NULL;    /* "3 45000 4 2352 track03.bin 0" */
+        } else if (field(&p, f[0], sizeof f[0]) != NULL && strcmp(f[0], "FILE") == 0 &&
+                   field(&p, f[1], sizeof f[1]) != NULL) {
+            file = f[1];
+        }
+        if (file == NULL || strchr(file, '/') != NULL || strchr(file, '\\') != NULL) {
+            continue;       /* only files beside it */
+        }
+        for (k = 0; k < n && strcmp(out[k], file) != 0; k++) {
+        }
+        if (k == n) {
+            snprintf(out[n++], 256, "%s", file);
+        }
+    }
+    fclose(s);
+    return n;
+}
+
+/* the image in dir deleted, its files all, once the disc's files are unpacked from it: they alone stay */
+void dc_image_remove(const char* dir) {
+    static char names[128][256];
+    char path[1400];
+    const char* image = dc_image_find(dir);
+    int n, i;
+    if (image == NULL) {
+        return;
+    }
+    n = dc_image_files(dir, image, names, 128);
+    for (i = 0; i < n; i++) {
+        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+        if (remove(path) == 0) {
+            host_log("disc image: %s deleted (unpacked)", names[i]);
+        }
+    }
+}
+
+/* the image in from moved into to (the same card: renamed, nothing copied); 1 when it was */
+int dc_image_move(const char* from, const char* to) {
+    static char names[128][256];
+    char a[1400], b[1400];
+    const char* image = dc_image_find(from);
+    int n, i, ok = 1;
+    if (image == NULL) {
+        return 0;
+    }
+    make_dir(to);
+    n = dc_image_files(from, image, names, 128);
+    for (i = 0; i < n; i++) {
+        snprintf(a, sizeof a, "%s/%s", from, names[i]);
+        snprintf(b, sizeof b, "%s/%s", to, names[i]);
+        if (rename(a, b) != 0) {
+            host_log("disc image: %s could not be moved to %s", a, to);
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
 typedef struct {
     char name[256];             /* its path in the disc, as A/B */
     uint32_t lba, bytes;
@@ -415,6 +495,11 @@ static void make_dirs(const char* dir, const char* name) {
 }
 
 const char* dc_image_unpack(const char* dir, void (*progress)(uint32_t done, uint32_t total)) {
+    return dc_image_unpack_to(dir, dir, progress);
+}
+
+/* the disc's files from the image in dir into out (the same folder or another) */
+const char* dc_image_unpack_to(const char* dir, const char* out_dir, void (*progress)(uint32_t done, uint32_t total)) {
     const char* image = dc_image_find(dir);
     const char* err = NULL;
     char path[1400], part[1410];
@@ -429,7 +514,8 @@ const char* dc_image_unpack(const char* dir, void (*progress)(uint32_t done, uin
         return fail("no disc image in %s", dir);
     }
     host_log("disc image: unpacking %s/%s", dir, image);
-    snprintf(path, sizeof path, "%s/_index.bin", dir);
+    make_dir(out_dir);
+    snprintf(path, sizeof path, "%s/_index.bin", out_dir);
     remove(path);       /* dc_gd.c's listing of the folder, made again from the files unpacked now */
     snprintf(path, sizeof path, "%s/%s", dir, image);
     t.raw = malloc((size_t)CHUNK * 2352);
@@ -467,8 +553,8 @@ const char* dc_image_unpack(const char* dir, void (*progress)(uint32_t done, uin
         const ENTRY* e = &entries[i];
         uint32_t left = e->bytes, lba = e->lba;
         FILE* out;
-        make_dirs(dir, e->name);
-        snprintf(path, sizeof path, "%s/%s", dir, e->name);
+        make_dirs(out_dir, e->name);
+        snprintf(path, sizeof path, "%s/%s", out_dir, e->name);
         snprintf(part, sizeof part, "%s.part", path);
         if ((out = fopen(part, "wb")) == NULL) {
             err = "a file could not be written (is the SD card full?)";

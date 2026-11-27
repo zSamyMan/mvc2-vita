@@ -121,6 +121,12 @@ const char* dc_disc_missing(const char* disc_path);   /* the same, the files alo
 const char* dc_image_find(const char* disc_path);     /* a disc image's name there (dc_image.c), or NULL */
 /* the disc's files from that image, into disc_path, with progress(done, total) in KB; NULL when done, else why not */
 const char* dc_image_unpack(const char* disc_path, void (*progress)(uint32_t done, uint32_t total));
+/* the image's own files in dir (the image, a .gdi's or .cue's tracks); the image deleted once unpacked; the image
+   moved from one folder to another on the same card */
+int dc_image_files(const char* dir, const char* image, char (*out)[256], int max);
+const char* dc_image_unpack_to(const char* dir, const char* out_dir, void (*progress)(uint32_t done, uint32_t total));
+void dc_image_remove(const char* dir);
+int dc_image_move(const char* from, const char* to);
 long dc_gd_read_file(const char* name, void* buf, long max);  /* a whole file; its size, or -1 */
 const char* dc_gd_path(const char* name);   /* a file's path on the host */
 const uint8_t* dc_gd_head(const char* name, uint32_t* len);  /* Vita: a music file's first bytes, kept in memory */

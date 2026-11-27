@@ -309,6 +309,19 @@ int pick_game(int argc, char** argv) {
         if (arg != NULL && (flag == i || flag < 0)) {
             path[i] = arg;
         }
+#if defined(__vita__) && defined(MVC2_DC)
+        if (i == DC && check(i, path[i]) != NULL) {
+            /* a dump put in the data folder itself (as the no-data screen says): moved into the disc's folder, to be
+               unpacked there */
+            char data[sizeof VITA_DATA_DIR];
+            snprintf(data, sizeof data, "%s", VITA_DATA_DIR);
+            data[strlen(data) - 1] = 0;     /* no trailing slash */
+            if (dc_image_find(data) != NULL) {
+                host_log("disc image %s found in %s: moved to %s", dc_image_find(data), data, path[i]);
+                dc_image_move(data, path[i]);
+            }
+        }
+#endif
         missing[i] = check(i, path[i]);
         found[i] = missing[i] == NULL;
     }
@@ -405,6 +418,9 @@ static int unpack_disc(const char* dir) {
 #endif
     missing = err == NULL ? dc_disc_missing(dir) : NULL;
     if (err == NULL && missing == NULL) {
+#ifdef __vita__
+        dc_image_remove(dir);   /* the image's files deleted: the unpacked files alone stay (the card's room back) */
+#endif
         return 1;
     }
     if (err != NULL) {

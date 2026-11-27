@@ -16,6 +16,8 @@ enum { RD_VGL_SHOT = 1, RD_VGL_DUMP = 2, RD_VGL_PERF = 4, RD_VGL_BURST = 8 };
 void rd_vgl_request(int what);
 /* the first start's screen while the disc's files are unpacked: 0 to 1000 as far as it has come; below 0 hides it */
 void rd_vgl_boot_progress(int permille);
+/* no game data: the warning screen shown from now on */
+void rd_vgl_warning(void);
 /* the overlay's figures: a thread's CPU share (by its id), the game's frame times from the front end */
 void rd_vgl_watch_thread(const char* name, int id);
 void rd_vgl_game_stats(float game_ms, float sound_ms, float worst_ms);

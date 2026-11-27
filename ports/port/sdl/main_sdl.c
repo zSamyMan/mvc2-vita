@@ -22,6 +22,7 @@
 #include "test_mode.h"
 #ifdef __vita__
 #include <psp2/io/stat.h>
+#include <psp2/kernel/threadmgr.h>
 #include "vita_sys.h"
 #endif
 #ifdef MVC2_VITAGL
@@ -841,7 +842,16 @@ int main(int argc, char** argv) {
     if (vgl_on) {
         const char* pick_message(void);     /* start.c */
         if (!pick_game(argc, argv)) {
-            host_log("stopped: %s", pick_message());    /* no window to say it in */
+            host_log("stopped: %s", pick_message());
+#ifdef __vita__
+            /* the no-data screen (Warning.png: where the dump goes) until the PS button leaves */
+            if (rd_vgl_init()) {
+                rd_vgl_warning();
+                for (;;) {
+                    sceKernelDelayThread(1000000);
+                }
+            }
+#endif
             return 1;
         }
     } else

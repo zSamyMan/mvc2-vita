@@ -3677,6 +3677,26 @@ void rd_vgl_boot_progress(int permille) {
     boot_on = 1;
 }
 
+/* no game data found: Warning.png, until the program is left (the PS button) */
+static volatile int warn_on;
+static GLuint warn_tex;
+
+void rd_vgl_warning(void) {
+    warn_on = 1;
+}
+
+static void draw_warning(void) {
+    if (warn_tex == 0) {
+        warn_tex = pic_load("warning");
+    }
+    glViewport(0, 0, SCREEN_W, SCREEN_H);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    pic_draw(warn_tex, PIC_W, PIC_H, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 1, 1);
+    vglSwapBuffers(GL_FALSE);
+}
+
 static void draw_boot(void) {
     float x1;
     if (boot_tex == 0) {
@@ -4001,18 +4021,19 @@ static int render_main(SceSize args, void* argp) {
         uint64_t t0, t1, t2, tw = now_us(), tp, td, tend;
         unsigned vc_missed_now = 0;
         int want;
-        int got = 0;
-        /* the first start's unpacking: its screen drawn about 30 times a second until the game's first frame */
-        while (boot_on && !got) {
+        /* the next frame, waited for a thirtieth of a second at a time: the first start's unpacking (which may begin
+           while this waits, before the game's first frame) has its screen drawn each time none came. A frame comes
+           every 16.7 ms in a game, so the wait runs out only in a pause */
+        for (;;) {
             SceUInt timeout = 33000;
             if (sceKernelWaitSema(sem_ready, 1, &timeout) >= 0) {
-                got = 1;
-            } else {
-                draw_boot();
+                break;
             }
-        }
-        if (!got) {
-            sceKernelWaitSema(sem_ready, 1, NULL);
+            if (boot_on) {
+                draw_boot();
+            } else if (warn_on) {
+                draw_warning();
+            }
         }
         if (boot_tex != 0 && !boot_on) {
             glDeleteTextures(1, &boot_tex);     /* the unpacking done: its picture's memory back */
