@@ -257,6 +257,8 @@ static int texels_made(int type, int w, int h) {
 
 static void set_mips(RD_TEXTURE* t, size_t texel);
 static size_t texel_bytes(int type, int w, int h, size_t* texel);
+static void texels_fresh(NL_TEX* t, size_t texel);
+static void retire(void* texels);
 
 /* a VQ square's texels from its kept source */
 static void unpack_kept(const RD_TEXTURE* t, RD_TEXTURE* out) {
@@ -321,6 +323,7 @@ static int unpack_again(NL_TEX* t, const void* src, size_t bytes, size_t texel) 
     int ok;
     if (!texels_made(t->type, t->tex.width, t->tex.height)) {
         if (memcmp(old, src, kept) != 0) {
+            texels_fresh(t, 0);     /* its kept source is what the renderer unpacks */
             keep_source(t, src, bytes);
             t->tex.serial = ++serials;
         }
@@ -342,7 +345,7 @@ static int unpack_again(NL_TEX* t, const void* src, size_t bytes, size_t texel) 
         set_mips(&t->tex, texel);
         return 1;
     }
-    free(old);
+    retire(old);    /* a frame in flight may still read it */
     t->bytes = room;
     keep_source(t, src, bytes);
     t->tex.serial = ++serials;
@@ -445,6 +448,24 @@ static size_t texel_bytes(int type, int w, int h, size_t* texel) {
 }
 
 static void retire(void* texels);
+
+/* A slot's texels about to change: a frame handed to the renderer may still read the ones it has (its snapshot points
+   at them, and the render thread uploads them while the game makes the next frame), so the change goes into a new
+   block, the old one retired until those frames are done. Written in place, a sprite's tile was seen as squares of
+   another sprite, or half of each, and a block freed at once was soon another texture's. The old block's bytes are
+   copied first (a kept source after the texels stays); in place only when there is no memory for a new one */
+static void texels_fresh(NL_TEX* t, size_t texel) {
+    void* fresh;
+    if (t->tex.texels == NULL || t->bytes == 0 || (fresh = host_try_malloc(t->bytes)) == NULL) {
+        return;
+    }
+    memcpy(fresh, t->tex.texels, t->bytes);
+    retire(t->tex.texels);
+    t->tex.texels = fresh;
+    if (texel != 0) {
+        set_mips(&t->tex, texel);
+    }
+}
 
 #if defined(__3DS__) || defined(__vita__)
 /* MVC2_TEX_KEEP_FREED=1: a small texture the game frees kept as it was, with its serial, while the kept ones come to
@@ -574,8 +595,12 @@ static int tex_load(NL_TEX* t, const NLthd* thd) {
     }
     hash_ok[t - nl_tex] = 0;
     room = source_at(thd->type, w, h, bytes) + source_kept(thd->type, w, h);
+    if (t->tex.texels != NULL) {
+        retire(t->tex.texels);      /* a frame in flight may still read the slot's last texels: a new block */
+        t->tex.texels = NULL;
+        t->bytes = 0;
+    }
     if (t->tex.texels == NULL || t->bytes < room) {
-        free(t->tex.texels);
         t->tex.texels = host_try_malloc(room);
 #if defined(__3DS__) || defined(__vita__)
         if (t->tex.texels == NULL && kept_bytes != 0) {
@@ -685,6 +710,9 @@ static int reload_cached(NL_TEX* t, const uint8_t* src, size_t bytes) {
         if (c->serial != 0 && c->hash == h && c->type == t->type && c->width == t->tex.width && c->height == t->tex.height) {
             c->used = ++cache_clock;
             if (t->tex.serial != c->serial) {
+                size_t texel;
+                texel_bytes(t->type, t->tex.width, t->tex.height, &texel);
+                texels_fresh(t, texel);
                 if (made) {
                     memcpy(t->tex.texels, cache_texels[h % CACHE_SETS][i], bytes);
                 }
@@ -699,12 +727,17 @@ static int reload_cached(NL_TEX* t, const uint8_t* src, size_t bytes) {
             e = c;
         }
     }
-    if (made) {
-        uint8_t* out = cache_texels[h % CACHE_SETS][e - set];
-        if (!unpack_level(kind, t->tex.width, t->tex.height, src, out)) {
+    {
+        size_t texel;
+        uint8_t* out = made ? cache_texels[h % CACHE_SETS][e - set] : NULL;
+        if (made && !unpack_level(kind, t->tex.width, t->tex.height, src, out)) {
             return 0;
         }
-        memcpy(t->tex.texels, out, bytes);
+        texel_bytes(t->type, t->tex.width, t->tex.height, &texel);
+        texels_fresh(t, texel);
+        if (made) {
+            memcpy(t->tex.texels, out, bytes);
+        }
     }
     keep_source(t, src, bytes);
     e->type = (uint16_t)t->type;

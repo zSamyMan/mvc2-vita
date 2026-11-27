@@ -78,6 +78,8 @@ typedef struct {
     unsigned frame_no;
     uint64_t handed;
     int shot;                   /* a picture of it wanted, rd_soft's of it already taken (MVC2_SHOT_SOFT) */
+    int early;                  /* its depths and translucent list's steps begun on the cutting thread as it was handed
+                                   over (job 5), while the frame before is drawn: prepare waits for them */
 } VFRAME;
 
 static VFRAME* vf[2];
@@ -171,6 +173,7 @@ typedef struct {
     uint64_t wait_us;           /* the game, waiting for the render thread to give a frame back */
     uint64_t prep_us, tex_us, gl_us, swap_us, frame_us;
     unsigned tris, batches, uploads, upload_kb, binds;
+    unsigned up_sub, up_pool, up_made;  /* uploads written into a texture it had, into one from the pool, into a new one */
     uint64_t slow_total, slow[6];
     uint64_t part_us[4], part_worst[4];     /* prepare's: depth table, opaque and punch, translucent cut and sort, add */
     unsigned last_vcount;
@@ -238,6 +241,10 @@ static void perf_report(int now) {
              order_checks / n, order_planes / n, order_adds / n, order_us / 1000.0 / n, order_init_us / 1000.0 / n);
     guard_cuts = cut_count = order_moves = order_checks = order_planes = order_adds = 0;
     order_us = order_init_us = 0;
+    if (perf.uploads > 0) {
+        host_log("vgl: uploads: %u into their own texture, %u into a pooled one, %u into a new one", perf.up_sub,
+                 perf.up_pool, perf.up_made);
+    }
     host_log("vgl: translucent list's steps a frame: info %.2f, bounds and cuts %.2f, sort %.2f, order %.2f ms (%u tris; "
              "%u deep, %u shallow, %u candidates; index %.2f, pieces %.2f, waiting for the cutting thread %.2f ms)", tl_us[0] / 1000.0 / n, tl_us[1] / 1000.0 / n, tl_us[2] / 1000.0 / n,
              tl_us[3] / 1000.0 / n, (unsigned)(tl_us[4] / n), (unsigned)(cut_stats[0] / n), (unsigned)(cut_stats[1] / n),
@@ -593,6 +600,48 @@ static uint64_t frame_up_us;
 static unsigned frame_up_no;
 static unsigned tex_frame_us = 1;
 
+/*
+ * GL textures given back (a slot's texture of a size it no longer has, a slot let go) kept by their size and format
+ * for another slot of that size, once the GPU is done with them (6 frames): a new texture is GPU memory taken and
+ * filled whole by vitaGL, a sprite tile changing size or a new one (a hyper's finish: a hundred a frame) cost about
+ * 3 ms a frame of them; one from here is written in place
+ */
+#define POOL_MOST 1536
+static struct {
+    GLuint id;
+    uint16_t w, h;
+    uint8_t format, levels;
+    uint32_t since;             /* render_no it was last drawn with */
+} tpool[POOL_MOST];
+static int npool;
+
+static void pool_put(GLuint id, int w, int h, int format, int levels, uint32_t since) {
+    if (id == 0) {
+        return;
+    }
+    if (npool == POOL_MOST) {
+        glDeleteTextures(1, &tpool[0].id);  /* the oldest given back */
+        memmove(tpool, tpool + 1, sizeof tpool[0] * (POOL_MOST - 1));
+        npool--;
+    }
+    tpool[npool].id = id, tpool[npool].w = (uint16_t)w, tpool[npool].h = (uint16_t)h;
+    tpool[npool].format = (uint8_t)format, tpool[npool].levels = (uint8_t)levels, tpool[npool].since = since;
+    npool++;
+}
+
+static GLuint pool_take(int w, int h, int format, int levels) {
+    int i;
+    for (i = 0; i < npool; i++) {
+        if (tpool[i].w == w && tpool[i].h == h && tpool[i].format == format && tpool[i].levels == levels &&
+            render_no - tpool[i].since > 5) {
+            GLuint id = tpool[i].id;
+            tpool[i] = tpool[--npool];
+            return id;
+        }
+    }
+    return 0;
+}
+
 static void tex_upload(TEX* e, const RD_TEXTURE* t) {
     GLenum fmt = GL_RGBA, type = GL_UNSIGNED_SHORT_5_5_5_1;
     int k, bytes = 0;
@@ -629,18 +678,42 @@ static void tex_upload(TEX* e, const RD_TEXTURE* t) {
         if (pick >= 0) {
             e->ring_at = (uint8_t)pick, sub = 1;
         } else if (e->ring_n < (int)(sizeof e->ring / sizeof e->ring[0])) {
+            GLuint id = e->hwpal ? 0 : pool_take(t->width, t->height, t->format, t->levels);
             e->ring_at = e->ring_n++;
-            glGenTextures(1, &e->ring[e->ring_at]);
+            if (id != 0) {
+                e->ring[e->ring_at] = id, sub = 2;
+            } else {
+                glGenTextures(1, &e->ring[e->ring_at]);
+            }
         }
         e->id = e->ring[e->ring_at];
     } else {
-        if (e->ring_n > 1) {
-            glDeleteTextures(e->ring_n - 1, &e->ring[1]);   /* another size: the turns start again */
+        /* another size (or none yet): the slot's textures to the pool (by the size they have), one of the new size
+           taken from it or made */
+        GLuint id;
+        int j;
+        for (j = 0; j < e->ring_n; j++) {
+            if (e->hwpal) {
+                glDeleteTextures(1, &e->ring[j]);
+            } else {
+                pool_put(e->ring[j], e->w, e->h, e->format, e->levels, e->ring_used[j] > e->used ? e->ring_used[j] : e->used);
+            }
         }
-        if (e->ring_n == 0) {
+        id = pool_take(t->width, t->height, t->format, t->levels);
+        if (id != 0) {
+            e->ring[0] = id, sub = 2;
+        } else {
             glGenTextures(1, &e->ring[0]);
         }
+        memset(e->ring_used, 0, sizeof e->ring_used);
         e->ring_n = 1, e->ring_at = 0, e->id = e->ring[0];
+    }
+    if (sub == 1) {
+        perf.up_sub++;
+    } else if (sub == 2) {
+        perf.up_pool++;
+    } else {
+        perf.up_made++;
     }
     e->wrap_s = e->wrap_t = e->filter = -1;
     glBindTexture(GL_TEXTURE_2D, e->id);
@@ -707,7 +780,9 @@ static TEX* tex_get(const SNAP* sn) {
     if (e->serial != sn->t.serial || e->w != sn->t.width || e->h != sn->t.height || e->format != sn->t.format) {
         if (tex_frame_us == 1) {
             const char* v = getenv("MVC2_TEX_FRAME_US");
-            tex_frame_us = v != NULL ? (unsigned)atoi(v) : 3000u;
+            tex_frame_us = v != NULL ? (unsigned)atoi(v) : 0u;   /* none: a tile left a frame late showed another
+                                                                    sprite's squares (Abyss's entrance, its slots
+                                                                    passed from sprite to sprite each frame) */
         }
         /* only a tile that changed in the last two frames (a sprite's animation: its last texels are its frame
            before) and that was not late the frame before. A tile taken over by another sprite (still for a while,
@@ -733,7 +808,14 @@ static void tex_sweep(void) {
     for (i = at; i < end; i++) {
         TEX* t = &texes[i];
         if (t->key != NULL && t->key != (const RD_TEXTURE*)1 && render_no - t->used > TEX_IDLE) {
-            glDeleteTextures(t->ring_n, t->ring);
+            int j;
+            for (j = 0; j < t->ring_n; j++) {
+                if (t->hwpal) {
+                    glDeleteTextures(1, &t->ring[j]);
+                } else {
+                    pool_put(t->ring[j], t->w, t->h, t->format, t->levels, t->used);
+                }
+            }
             memset(t, 0, sizeof *t);
             t->key = (const RD_TEXTURE*)1;
         }
@@ -801,7 +883,13 @@ static float depth_work_max;
 static void cut_run(int kind, const RD_FRAME* f, int from, int to);
 static void cut_wait(void);
 
+static void depth_table_split(const RD_FRAME* f, int split);
 static void depth_table(const RD_FRAME* f) {
+    depth_table_split(f, 1);
+}
+
+/* split: its second half on the cutting thread (not when it runs there itself) */
+static void depth_table_split(const RD_FRAME* f, int split) {
     int l, n = 0, g = 0;
     float zmax;
     for (l = 0; l < RD_LISTS; l++) {
@@ -816,7 +904,7 @@ static void depth_table(const RD_FRAME* f) {
     if (!depth_room(n)) {
         return;
     }
-    if (cut_go_ready() && g >= 1024) {
+    if (split && cut_go_ready() && g >= 1024) {
         /* the second half on the cutting thread */
         cut_run(3, f, g / 2, g);
         zmax = depth_part(f, 0, g / 2);
@@ -1499,6 +1587,8 @@ static unsigned cut_most;
    frame) held it for good, its light flickering as the pieces cut and whole took turns */
 #define CUT_BUSY_US 15000u
 #define CUT_KEEP_US 14000u
+#define CUT_PERIOD_US 17500u        /* a period past a frame's 16.7 ms: frames late */
+#define CUT_PERIOD_KEEP_US 16000u
 #define CUT_HOLD 60
 static int cut_hold, cut_heavy_run;
 static uint64_t last_draw_us;   /* draw_frame's last, from the render loop */
@@ -1585,6 +1675,16 @@ static int cut_main(SceSize args, void* argp) {
             depth_work_max = depth_part(cut_job.f, cut_job.from, cut_job.to);
             break;
         case 4:
+            trans_pre(cut_job.f);
+            tl_on_cut = 1;
+            trans_post(cut_job.f);
+            tl_on_cut = 0;
+            break;
+        case 5:
+            /* a frame just handed over, while the render thread draws the one before: its depths and its translucent
+               list's steps (a hyper's finish, the screen nearly all translucent: the render thread had waited 5 ms
+               for these, idle, after drawing) */
+            depth_table_split(cut_job.f, 0);
             trans_pre(cut_job.f);
             tl_on_cut = 1;
             trans_post(cut_job.f);
@@ -2317,7 +2417,12 @@ static void prepare(const VFRAME* v) {
         fog_on |= fog.table[i] != 0.0f;
     }
     uint64_t q0 = now_us(), q1, q2, q3, q4;
-    depth_table(f);
+    if (v->early) {
+        cut_wait();             /* the depths and the translucent steps begun at the hand-over */
+        cut_us[2] += now_us() - q0;
+    } else {
+        depth_table(f);
+    }
     q1 = now_us();
     /* the background: three corners of a plane, the fourth made from them; its colours and depth not over w */
     {
@@ -2357,7 +2462,7 @@ static void prepare(const VFRAME* v) {
         }
     }
     /* the translucent list's first steps on the cutting thread meanwhile */
-    int pre_away = cut_go_ready() && f->ntris[RD_TRANS] >= 256;
+    int pre_away = !v->early && cut_go_ready() && f->ntris[RD_TRANS] >= 256;
     if (trans_away < 0) {
         trans_away = getenv("MVC2_TRANS_AWAY") == NULL || atoi(getenv("MVC2_TRANS_AWAY")) != 0;
     }
@@ -2378,7 +2483,9 @@ static void prepare(const VFRAME* v) {
         }
     }
     q2 = now_us();
-    if (pre_away) {
+    if (v->early) {
+        /* done before it began */
+    } else if (pre_away) {
         cut_wait();
         if (trans_away) {
             cut_us[2] += now_us() - q2;     /* all of it done there: what the render thread waited */
@@ -2386,7 +2493,7 @@ static void prepare(const VFRAME* v) {
     } else {
         trans_pre(f);
     }
-    if (!pre_away || !trans_away) {
+    if (!v->early && (!pre_away || !trans_away)) {
         trans_post(f);
     }
     q3 = now_us();
@@ -2430,7 +2537,18 @@ static void prepare(const VFRAME* v) {
     }
     t1 = now_us();
     perf.prep_us += t1 - t0;
-    cut_heavy_run = t1 - t0 > CUT_HEAVY_US || t1 - t0 + last_draw_us > CUT_BUSY_US ? cut_heavy_run + 1 : 0;
+    /* the render thread's period, prepare's end to prepare's end: with the translucent steps begun at the hand-over
+       (job 5) prepare itself is short while the frames still come late (Abyss's triple finish: 5 ms of it, 46 fps) */
+    {
+        static uint64_t last_end;
+        uint64_t period = last_end != 0 ? t1 - last_end : 0;
+        last_end = t1;
+        cut_heavy_run = t1 - t0 > CUT_HEAVY_US || t1 - t0 + last_draw_us > CUT_BUSY_US || period > CUT_PERIOD_US
+                        ? cut_heavy_run + 1 : 0;
+        if (cut_capped && period > CUT_PERIOD_KEEP_US) {
+            cut_hold = CUT_HOLD;
+        }
+    }
     if (cut_heavy_run >= 2 || (cut_capped && t1 - t0 + last_draw_us > CUT_KEEP_US)) {
         cut_hold = CUT_HOLD;
     } else if (cut_hold > 0) {
@@ -3665,7 +3783,7 @@ static void draw_borders(void) {
 #define BOOT_BAR_X1 390.0f
 #define BOOT_BAR_Y0 243.0f
 #define BOOT_BAR_Y1 268.0f
-static volatile int boot_on, boot_permille;
+static volatile int boot_on, boot_permille, boot_shown;
 static GLuint boot_tex, boot_bar_tex;
 
 void rd_vgl_boot_progress(int permille) {
@@ -3674,6 +3792,9 @@ void rd_vgl_boot_progress(int permille) {
         return;
     }
     boot_permille = permille > 1000 ? 1000 : permille;
+    if (!boot_on) {
+        host_log("vgl: the first start's screen on");
+    }
     boot_on = 1;
 }
 
@@ -3698,10 +3819,13 @@ static void draw_warning(void) {
 }
 
 static void draw_boot(void) {
+    static int drawn;
     float x1;
     if (boot_tex == 0) {
+        host_log("vgl: the first start's screen: loading its picture");
         boot_tex = pic_load("first_boot");
         boot_bar_tex = pic_colour(250, 200, 20);
+        host_log("vgl: the first start's screen: picture %u", (unsigned)boot_tex);
     }
     glViewport(0, 0, SCREEN_W, SCREEN_H);
     glDisable(GL_SCISSOR_TEST);
@@ -3713,6 +3837,22 @@ static void draw_boot(void) {
         pic_draw(boot_bar_tex, 1, 1, BOOT_BAR_X0, BOOT_BAR_Y0, x1, BOOT_BAR_Y1, 0, 0, 1, 1);
     }
     vglSwapBuffers(GL_FALSE);
+    if (drawn++ == 0) {
+        host_log("vgl: the first start's screen drawn");
+    }
+    boot_shown = 1;
+}
+
+/* the first start's screen up before the unpacking starts writing: its picture read from app0: first, as the
+   unpacking's long writes to the card held that read up for more than a minute (the vitaGL splash shown meanwhile) */
+void rd_vgl_boot_wait(void) {
+    int i;
+    for (i = 0; i < 300 && !boot_shown; i++) {
+        sceKernelDelayThread(10000);
+    }
+    if (!boot_shown) {
+        host_log("vgl: the first start's screen not up after 3 s");
+    }
 }
 
 /* ---- the render thread ---- */
@@ -4306,6 +4446,11 @@ void rd_vgl_present(void) {
         }
         if (k < 0) {
             if (v->nsnaps == MAX_SNAPS) {
+                static int told;
+                if (told++ < 4) {
+                    host_log("vgl: frame %u has more than %d textures: the rest drawn untextured", presented + 1,
+                             MAX_SNAPS);
+                }
                 s->tex = NULL;
                 continue;
             }
@@ -4317,6 +4462,12 @@ void rd_vgl_present(void) {
     }
     v->frame_no = ++presented;
     v->handed = now_us();
+    /* a frame with a translucent list worth it: its depths and translucent steps begun now on the cutting thread
+       (idle: the render thread's prepare of the frame before is done, it only draws that one now) */
+    v->early = cut_go_ready() && trans_away != 0 && f->ntris[RD_TRANS] >= 256;
+    if (v->early) {
+        cut_run(5, f, 0, 0);
+    }
     sceKernelSignalSema(sem_ready, 1);
     fill ^= 1;
     rd_frame = vf[fill]->f;

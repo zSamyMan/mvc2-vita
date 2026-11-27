@@ -117,7 +117,11 @@ void nlaUpdateUserBackup(void);
 int dc_init(const HOST_PROGRAM* program, const char* disc_path);
 int dc_gd_open(const char* disc_path);
 const char* dc_disc_check(const char* disc_path);  /* a file missing or the wrong size, or NULL (or an image there) */
-const char* dc_disc_missing(const char* disc_path);   /* the same, the files alone */
+const char* dc_disc_missing(const char* disc_path);   /* the same, the files alone (or an unfinished unpacking) */
+#define DC_UNPACK_JOURNAL "_unpack.txt"     /* in the disc's folder while its files are unpacked (dc_image.c) */
+/* a disc file's path in the disc folder: the root's files in 32 subfolders by a hash of the name when buckets */
+void dc_disc_path(char* out, size_t n, const char* dir, const char* name, int buckets);
+int dc_disc_buckets(const char* dir);   /* 1 when the folder is laid out so */
 const char* dc_image_find(const char* disc_path);     /* a disc image's name there (dc_image.c), or NULL */
 /* the disc's files from that image, into disc_path, with progress(done, total) in KB; NULL when done, else why not */
 const char* dc_image_unpack(const char* disc_path, void (*progress)(uint32_t done, uint32_t total));

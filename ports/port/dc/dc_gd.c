@@ -35,6 +35,7 @@ struct GDS_FS_HANDLE {
 };
 
 static char root[1024];
+static int buckets;     /* the root's files in subfolders by a hash of their name (dc_disc_path) */
 static struct GDS_FS_HANDLE files[GD_MAX_OPEN];
 static struct GDS_FS_HANDLE sys_handle = { NULL, 0, 0, GDD_STAT_COMPLETE };
 
@@ -58,10 +59,17 @@ const char* dc_disc_missing(const char* dir) {
     char path[1200];
     struct stat st;
     size_t i;
-    for (i = 0; i < sizeof disc_files / sizeof disc_files[0]; i++) {
-        snprintf(path, sizeof path, "%s/%s", dir, disc_files[i].name);
-        if (stat(path, &st) != 0 || st.st_size != disc_files[i].size) {
-            return disc_files[i].name;
+    snprintf(path, sizeof path, "%s/" DC_UNPACK_JOURNAL, dir);
+    if (stat(path, &st) == 0) {
+        return DC_UNPACK_JOURNAL " (an unpacking not finished)";
+    }
+    {
+        int buckets = dc_disc_buckets(dir);     /* in subfolders, or flat (unpacked by an older build) */
+        for (i = 0; i < sizeof disc_files / sizeof disc_files[0]; i++) {
+            dc_disc_path(path, sizeof path, dir, disc_files[i].name, buckets);
+            if (stat(path, &st) != 0 || st.st_size != disc_files[i].size) {
+                return disc_files[i].name;
+            }
         }
     }
     return NULL;
@@ -73,6 +81,8 @@ static void cache_start(void);
 
 int dc_gd_open(const char* disc_path) {
     snprintf(root, sizeof root, "%s", disc_path);
+    buckets = dc_disc_buckets(root);
+    host_log("gd: the disc's files %s", buckets ? "in subfolders (by a hash of the name)" : "in one folder");
 #ifdef __vita__
     cache_start();
 #endif
@@ -609,7 +619,7 @@ static int read_head(const char* name, uint32_t size) {
     if (nheads >= HEADS_MOST || size == 0 || (d = malloc(want)) == NULL) {
         return 0;
     }
-    snprintf(path, sizeof path, "%s/%s", root, name);
+    dc_disc_path(path, sizeof path, root, name, buckets);
     bg_wait();
     if ((f = fopen(path, "rb")) == NULL) {
         free(d);
@@ -774,7 +784,7 @@ static int cache_read(int i, uint32_t* done) {
     char path[1200];
     FILE* f;
     int ok = 0;
-    snprintf(path, sizeof path, "%s/%s", root, cached[i].name);
+    dc_disc_path(path, sizeof path, root, cached[i].name, buckets);
     bg_wait();
     if ((f = fopen(path, "rb")) == NULL) {
         return 0;
@@ -887,7 +897,7 @@ static void late_main(void) {
                 continue;
             }
             t0 = sceKernelGetProcessTimeWide();
-            snprintf(path, sizeof path, "%s/%s", root, listed[j].name);
+            dc_disc_path(path, sizeof path, root, listed[j].name, buckets);
             bg_wait();
             if ((f = fopen(path, "rb")) == NULL) {
                 continue;
@@ -929,20 +939,34 @@ static int cache_main(SceSize args, void* argp) {
     int i, n = 0, got = 0;
     (void)args, (void)argp;
     if (!index_load()) {
-        if ((dir = sceIoDopen(root)) < 0) {
-            host_log("gd: could not list %s (%08X): no files in memory", root, dir);
-            return 0;
-        }
-        while (sceIoDread(dir, &ent) > 0) {
-            if (!SCE_S_ISDIR(ent.d_stat.st_mode) && ent.d_name[0] != '_' && strlen(ent.d_name) < sizeof listed[0].name &&
-                nlisted < LISTED_MOST) {
-                snprintf(listed[nlisted].name, sizeof listed[0].name, "%s", ent.d_name);
-                listed[nlisted].size = (uint32_t)ent.d_stat.st_size;
-                __sync_synchronize();
-                nlisted++;
+        /* the folder's files (laid out in subfolders: the one-letter folders' files) */
+        static const char letters[] = "0123456789ABCDEFGHIJKLMNOPQRSTUV";
+        int li;
+        for (li = 0; li < (buckets ? (int)sizeof letters - 1 : 1); li++) {
+            char sub[1100];
+            if (buckets) {
+                snprintf(sub, sizeof sub, "%s/%c", root, letters[li]);
+            } else {
+                snprintf(sub, sizeof sub, "%s", root);
             }
+            if ((dir = sceIoDopen(sub)) < 0) {
+                if (!buckets) {
+                    host_log("gd: could not list %s (%08X): no files in memory", root, dir);
+                    return 0;
+                }
+                continue;
+            }
+            while (sceIoDread(dir, &ent) > 0) {
+                if (!SCE_S_ISDIR(ent.d_stat.st_mode) && ent.d_name[0] != '_' &&
+                    strlen(ent.d_name) < sizeof listed[0].name && nlisted < LISTED_MOST) {
+                    snprintf(listed[nlisted].name, sizeof listed[0].name, "%s", ent.d_name);
+                    listed[nlisted].size = (uint32_t)ent.d_stat.st_size;
+                    __sync_synchronize();
+                    nlisted++;
+                }
+            }
+            sceIoDclose(dir);
         }
-        sceIoDclose(dir);
         index_save();
         host_log("gd: %d files listed in %.1f s, kept in %s", nlisted, (sceKernelGetProcessTimeWide() - t0) / 1e6,
                  INDEX_NAME);
@@ -1130,7 +1154,7 @@ static FILE* open_file(const char* name) {
 #ifdef __vita__
     uint64_t t_open = read_begin();
 #endif
-    snprintf(path, sizeof path, "%s/%s", root, name);
+    dc_disc_path(path, sizeof path, root, name, buckets);
 #ifdef __vita__
     cache_boost(name);
     fg_begin();
@@ -1163,7 +1187,7 @@ static FILE* open_file(const char* name) {
 #if defined(__3DS__) || defined(__vita__)
 const char* dc_gd_path(const char* name) {
     static char path[1200];
-    snprintf(path, sizeof path, "%s/%s", root, name);
+    dc_disc_path(path, sizeof path, root, name, buckets);
     return path;
 }
 #endif

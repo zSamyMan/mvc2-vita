@@ -407,6 +407,7 @@ static int unpack_disc(const char* dir) {
     (void)image;
 #ifdef MVC2_VITAGL
     rd_vgl_boot_progress(0);
+    rd_vgl_boot_wait();
 #endif
     err = dc_image_unpack(dir, unpack_progress);
 #ifdef MVC2_VITAGL

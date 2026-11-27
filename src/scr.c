@@ -394,9 +394,16 @@ Float scr_wide_dx( void )
    the farther behind the players' plane (rd.c's host_wide_stage), where a far band or a wall's end stopped short of
    the wider screen's side: with the camera drawn with (the eye as scr_matrix_set has it) */
 extern void host_wide_stage( int on, Float xe, Float ez ) ;
+/* only the stages whose models end short of the wider screen: the desert (1, 10), the swamp (4), the cave (5, 14) and
+   the clock tower (6, 15). The others keep their shapes (Abyss's, 8: his core, a sphere among the stage's objects,
+   was drawn 12% wider, an ellipse) */
 void scr_wide_stage( int on )
 {
-	host_wide_stage( on && host_wide_side_x( 1 ) != 0.0f, scr_work.eye[0].x + scr_wide_dx(), scr_work.eye[0].z ) ;
+	static const Uint8 widened[17] = { 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0 } ;
+	int st = stage_no ;
+
+	host_wide_stage( on && host_wide_side_x( 1 ) != 0.0f && st >= 0 && st < 17 && widened[st],
+					 scr_work.eye[0].x + scr_wide_dx(), scr_work.eye[0].z ) ;
 }
 #endif
 

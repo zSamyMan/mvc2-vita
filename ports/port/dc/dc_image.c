@@ -13,7 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <fcntl.h>
 #ifdef _WIN32
+#include <io.h>
 #include <direct.h>
 #define make_dir(p) _mkdir(p)
 #else
@@ -25,12 +28,22 @@
 
 #include "naomi_host.h"
 
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+#ifdef _WIN32
+#define lseek64_ _lseeki64
+#else
+#include <unistd.h>
+#define lseek64_(fd, at, how) lseek((fd), (off_t)(at), (how))
+#endif
+
 #define HD_FIRST 45000          /* track 3's first sector */
 #define SECTOR 2048
-#define CHUNK 128               /* sectors a read */
+#define CHUNK 512               /* sectors a read: 1 MB of files, a few calls (the Vita's card pays for each) */
 
 typedef struct {
-    FILE* f;
+    int fd;                     /* a file track's (-1 none): read with read(), each read at its place by lseek() first */
     long long at;               /* the file offset of the track's first sector */
     chd_file* chd;
     uint32_t frame0;            /* the CHD frame of the track's first sector */
@@ -43,6 +56,19 @@ typedef struct {
 } TRACK;
 
 static char why[300];
+
+/* microseconds, for the unpacking's account of where its time went */
+#ifdef __vita__
+#include <psp2/kernel/processmgr.h>
+static uint64_t now_us(void) {
+    return sceKernelGetProcessTimeWide();
+}
+#else
+static uint64_t now_us(void) {
+    return (uint64_t)clock() * 1000000u / CLOCKS_PER_SEC;
+}
+#endif
+static uint64_t us_read, us_open, us_write, us_close;
 
 static const char* fail(const char* fmt, const char* what) {
     snprintf(why, sizeof why, fmt, what);
@@ -64,12 +90,60 @@ static int ends_with(const char* name, const char* end) {
     return 1;
 }
 
-static int seek(FILE* f, long long at) {
-#ifdef _WIN32
-    return _fseeki64(f, at, SEEK_SET);
-#else
-    return fseeko(f, (off_t)at, SEEK_SET);
-#endif
+/* The disc folder's layout: the files of the disc's root in 32 subfolders by a hash of their name (disc/N/SELTEX.BIN),
+   a few dozen a folder, the disc's own folders as they are (disc/DPTEX/...). Making a file in one folder of 720
+   cost the Vita's card about 120 ms, the folder's entries looked through each time; a folder of all of them unpacked
+   before (flat) is still read */
+static char bucket_of(const char* name) {
+    uint32_t h = 2166136261u;   /* FNV-1a of the name, upper case: 32 folders, about 24 files each (by first letter
+                                   one had 400: STG..., SE...) */
+    for (; *name != 0; name++) {
+        h = (h ^ (uint32_t)toupper((unsigned char)*name)) * 16777619u;
+    }
+    return "0123456789ABCDEFGHIJKLMNOPQRSTUV"[h % 32];
+}
+
+void dc_disc_path(char* out, size_t n, const char* dir, const char* name, int buckets) {
+    if (buckets && strchr(name, '/') == NULL) {
+        snprintf(out, n, "%s/%c/%s", dir, bucket_of(name), name);
+    } else {
+        snprintf(out, n, "%s/%s", dir, name);
+    }
+}
+
+/* 1 when dir is laid out in subfolders (its program in its own one) */
+int dc_disc_buckets(const char* dir) {
+    char path[1400];
+    struct stat st;
+    dc_disc_path(path, sizeof path, dir, "1ST_READ.BIN", 1);
+    return stat(path, &st) == 0;
+}
+
+/* n bytes read whole (a read may give fewer: on the Vita a call reads up to 1 MB of the card at a time), or 0 */
+static int read_all(int fd, void* buf, size_t n) {
+    uint8_t* p = buf;
+    while (n > 0) {
+        long k = (long)read(fd, p, (unsigned)n);
+        if (k <= 0) {
+            return 0;
+        }
+        p += k;
+        n -= (size_t)k;
+    }
+    return 1;
+}
+
+static int write_all(int fd, const void* buf, size_t n) {
+    const uint8_t* p = buf;
+    while (n > 0) {
+        long k = (long)write(fd, p, (unsigned)n);
+        if (k <= 0) {
+            return 0;
+        }
+        p += k;
+        n -= (size_t)k;
+    }
+    return 1;
 }
 
 /* n sectors of track 3 from sector lba on, their 2048 bytes each */
@@ -92,11 +166,15 @@ static int read_sectors(TRACK* t, uint32_t lba, uint32_t n, uint8_t* out) {
         return 1;
     }
     if (t->size == SECTOR) {
-        return seek(t->f, t->at + (long long)(lba - HD_FIRST) * SECTOR) == 0 && fread(out, SECTOR, n, t->f) == n;
+        long long at = t->at + (long long)(lba - HD_FIRST) * SECTOR;
+        return lseek64_(t->fd, at, SEEK_SET) >= 0 && read_all(t->fd, out, (size_t)n * SECTOR);
     }
     while (n > 0) {
         uint32_t k = n < CHUNK ? n : CHUNK;
-        if (seek(t->f, t->at + (long long)(lba - HD_FIRST) * t->size) != 0 || fread(t->raw, t->size, k, t->f) != k) {
+        long long at = t->at + (long long)(lba - HD_FIRST) * t->size;
+        /* sought each time: on the Vita an unbuffered read did not leave the file where it ended (a seek skipped
+           for the next read there read other files' bytes into these, the sizes all right) */
+        if (lseek64_(t->fd, at, SEEK_SET) < 0 || !read_all(t->fd, t->raw, (size_t)k * t->size)) {
             return 0;
         }
         for (i = 0; i < k; i++) {
@@ -119,10 +197,10 @@ static int has_volume(TRACK* t) {
 static int file_track(TRACK* t, const char* path, long long at, int size) {
     static const int gaps[] = { 0, 150, -150 };
     size_t i;
-    t->f = fopen(path, "rb");
+    t->fd = open(path, O_RDONLY | O_BINARY);
     t->size = size;
     t->data = size == 2352 ? 16 : 0;
-    if (t->f == NULL || (size != SECTOR && size != 2352)) {
+    if (t->fd < 0 || (size != SECTOR && size != 2352)) {
         return 0;
     }
     for (i = 0; i < sizeof gaps / sizeof gaps[0]; i++) {
@@ -278,8 +356,8 @@ static int chd_track(TRACK* t, const char* path, const char** err) {
 }
 
 static void track_close(TRACK* t) {
-    if (t->f != NULL) {
-        fclose(t->f);
+    if (t->fd >= 0) {
+        close(t->fd);
     }
     if (t->chd != NULL) {
         chd_close(t->chd);
@@ -287,6 +365,7 @@ static void track_close(TRACK* t) {
     free(t->hunk);
     free(t->raw);
     memset(t, 0, sizeof *t);
+    t->fd = -1;
 }
 
 /* a file in dir whose name ends so */
@@ -486,12 +565,136 @@ static int by_lba(const void* a, const void* b) {
 
 /* the folders a file's path needs, under dir */
 static void make_dirs(const char* dir, const char* name) {
+    static char made[300];      /* the folder the file before was in, made then */
     char path[1400];
     const char* s;
+    const char* last = strrchr(name, '/');
+    if (last == NULL || ((size_t)(last - name) < sizeof made && strncmp(made, name, (size_t)(last - name)) == 0 &&
+                         made[last - name] == 0)) {
+        return;
+    }
+    snprintf(made, sizeof made, "%.*s", (int)(last - name), name);
     for (s = strchr(name, '/'); s != NULL; s = strchr(s + 1, '/')) {
         snprintf(path, sizeof path, "%s/%.*s", dir, (int)(s - name), name);
         make_dir(path);
     }
+}
+
+/* the unpacking's journal in the output folder while it runs: the image, its file count and how many of its files
+   (in the order they are unpacked, by their place on the disc) are finished. Its being there says the folder's files
+   are not all there yet (dc_gd.c's check); an unpacking of the same image goes on from it */
+#define JOURNAL DC_UNPACK_JOURNAL
+#define JOURNAL_FILES 32
+#define JOURNAL_BYTES (16u << 20)
+
+static int journal_read(const char* out_dir, const char* image, int files) {
+    char path[1400], line[1200], name[1100];
+    int n = 0, finished = 0;
+    FILE* f;
+    snprintf(path, sizeof path, "%s/" JOURNAL, out_dir);
+    if ((f = fopen(path, "r")) == NULL) {
+        return 0;
+    }
+    name[0] = 0;
+    if (fgets(line, sizeof line, f) != NULL) {
+        line[strcspn(line, "\r\n")] = 0;
+        snprintf(name, sizeof name, "%s", line);
+    }
+    if (fgets(line, sizeof line, f) != NULL) {
+        n = atoi(line);
+    }
+    if (fgets(line, sizeof line, f) != NULL) {
+        finished = atoi(line);
+    }
+    /* the layout: 2 the root's files in subfolders (an unpacking begun flat, by an older build, begins again) */
+    if (fgets(line, sizeof line, f) == NULL || atoi(line) != 2) {
+        finished = 0;
+    }
+    fclose(f);
+    return strcmp(name, image) == 0 && n == files && finished > 0 && finished <= files ? finished : 0;
+}
+
+/* dc_gd.c's listing of the folder (_index.bin: "MVC2IDX1", the count, then each root file's name in 24 bytes and its
+   size): the files just unpacked, so the game does not ask the card for the folder's entries (18 to 36 s on a slow
+   card) at its first start */
+static void index_write(const char* out_dir) {
+    char path[1400], name[24];
+    uint32_t n = 0;
+    FILE* f;
+    int i;
+    for (i = 0; i < n_entries; i++) {
+        n += strchr(entries[i].name, '/') == NULL && strlen(entries[i].name) < sizeof name;
+    }
+    snprintf(path, sizeof path, "%s/_index.bin", out_dir);
+    if ((f = fopen(path, "wb")) == NULL) {
+        return;
+    }
+    fwrite("MVC2IDX1", 1, 8, f);
+    fwrite(&n, 4, 1, f);
+    for (i = 0; i < n_entries; i++) {
+        if (strchr(entries[i].name, '/') == NULL && strlen(entries[i].name) < sizeof name) {
+            memset(name, 0, sizeof name);
+            memcpy(name, entries[i].name, strlen(entries[i].name));
+            fwrite(name, 1, sizeof name, f);
+            fwrite(&entries[i].bytes, 4, 1, f);
+        }
+    }
+    fclose(f);
+}
+
+/* the USA disc's program as unpacked: its CRC-32 */
+#define PROGRAM_CRC 0x84C6AF93u
+static int program_ok(const char* out_dir) {
+    static uint32_t table[256];
+    char path[1400];
+    uint8_t chunk[65536];
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t n, i;
+    FILE* f;
+    if (table[1] == 0) {
+        for (i = 0; i < 256; i++) {
+            uint32_t c = (uint32_t)i;
+            int k;
+            for (k = 0; k < 8; k++) {
+                c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            }
+            table[i] = c;
+        }
+    }
+    dc_disc_path(path, sizeof path, out_dir, "1ST_READ.BIN", 1);
+    if ((f = fopen(path, "rb")) == NULL) {
+        return 0;
+    }
+    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) {
+        for (i = 0; i < n; i++) {
+            crc = table[(crc ^ chunk[i]) & 0xFF] ^ (crc >> 8);
+        }
+    }
+    fclose(f);
+    crc ^= 0xFFFFFFFFu;
+    if (crc != PROGRAM_CRC) {
+        host_log("disc image: 1ST_READ.BIN's CRC-32 %08X, not %08X", (unsigned)crc, (unsigned)PROGRAM_CRC);
+    }
+    return crc == PROGRAM_CRC;
+}
+
+/* one record of a fixed size written over the last in a single call, the file never emptied first: an unpacking
+   stopped while it writes keeps the record before */
+static int journal_write(const char* out_dir, const char* image, int files, int finished) {
+    char path[1400], rec[1280];
+    FILE* f;
+    int ok;
+    snprintf(path, sizeof path, "%s/" JOURNAL, out_dir);
+    if ((f = fopen(path, "r+b")) == NULL && (f = fopen(path, "wb")) == NULL) {
+        return 0;
+    }
+    setvbuf(f, NULL, _IONBF, 0);
+    memset(rec, ' ', sizeof rec);
+    snprintf(rec, sizeof rec - 1, "%s\n%d\n%d\n2\n", image, files, finished);
+    rec[strlen(rec)] = ' ';     /* the terminator's place padded too: the record is all text */
+    rec[sizeof rec - 1] = '\n';
+    ok = fwrite(rec, 1, sizeof rec, f) == sizeof rec;
+    return fclose(f) == 0 && ok;
 }
 
 const char* dc_image_unpack(const char* dir, void (*progress)(uint32_t done, uint32_t total)) {
@@ -502,13 +705,15 @@ const char* dc_image_unpack(const char* dir, void (*progress)(uint32_t done, uin
 const char* dc_image_unpack_to(const char* dir, const char* out_dir, void (*progress)(uint32_t done, uint32_t total)) {
     const char* image = dc_image_find(dir);
     const char* err = NULL;
-    char path[1400], part[1410];
+    char path[1400];
     uint8_t vol[SECTOR];
     uint8_t* buf = NULL;
-    uint64_t total = 0, done = 0;
+    uint64_t total = 0, done = 0, since;
     TRACK t;
-    int ok = 0, i;
+    int ok = 0, i, first;
+    time_t t0 = time(NULL);
     memset(&t, 0, sizeof t);
+    t.fd = -1;
     t.hunk_no = ~0u;
     if (image == NULL) {
         return fail("no disc image in %s", dir);
@@ -549,14 +754,45 @@ const char* dc_image_unpack_to(const char* dir, const char* out_dir, void (*prog
     }
     buf = malloc((size_t)CHUNK * SECTOR);
     ok = buf != NULL;
-    for (i = 0; ok && i < n_entries; i++) {
+    /* where an unpacking left off (the same image, the same files): the files it had finished kept */
+    first = journal_read(out_dir, image, n_entries);
+    for (i = 0; i < first; i++) {
+        done += entries[i].bytes;
+    }
+    if (first > 0) {
+        host_log("disc image: going on from file %d of %d (%lu KB done)", first + 1, n_entries,
+                 (unsigned long)(done >> 10));
+    }
+    if (ok && !journal_write(out_dir, image, n_entries, first)) {
+        err = "a file could not be written (is the SD card full?)";
+        ok = 0;
+    }
+    {
+        /* the subfolders, each once */
+        char made[256] = { 0 };
+        for (i = 0; ok && i < n_entries; i++) {
+            char b = bucket_of(entries[i].name);
+            if (strchr(entries[i].name, '/') == NULL && !made[(unsigned char)b]) {
+                made[(unsigned char)b] = 1;
+                snprintf(path, sizeof path, "%s/%c", out_dir, b);
+                make_dir(path);
+            }
+        }
+    }
+    since = 0;
+    for (i = first; ok && i < n_entries; i++) {
         const ENTRY* e = &entries[i];
         uint32_t left = e->bytes, lba = e->lba;
-        FILE* out;
-        make_dirs(out_dir, e->name);
-        snprintf(path, sizeof path, "%s/%s", out_dir, e->name);
-        snprintf(part, sizeof part, "%s.part", path);
-        if ((out = fopen(part, "wb")) == NULL) {
+        int out;
+        if (strchr(e->name, '/') != NULL) {
+            make_dirs(out_dir, e->name);    /* the disc's own folders */
+        }
+        dc_disc_path(path, sizeof path, out_dir, e->name, 1);
+        /* written as itself: an unpacking stopped in it starts it again (the journal says it was not finished) */
+        uint64_t q = now_us();
+        out = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0666);
+        us_open += now_us() - q;
+        if (out < 0) {
             err = "a file could not be written (is the SD card full?)";
             ok = 0;
             break;
@@ -565,27 +801,38 @@ const char* dc_image_unpack_to(const char* dir, const char* out_dir, void (*prog
             uint32_t k = (left + SECTOR - 1) / SECTOR, bytes;
             k = k < CHUNK ? k : CHUNK;
             bytes = k * SECTOR < left ? k * SECTOR : left;
+            q = now_us();
             if (!read_sectors(&t, lba, k, buf)) {
                 err = "the image could not be read";
                 ok = 0;
-            } else if (fwrite(buf, 1, bytes, out) != bytes) {
+            }
+            us_read += now_us() - q;
+            q = now_us();
+            if (ok && !write_all(out, buf, bytes)) {
                 err = "a file could not be written (is the SD card full?)";
                 ok = 0;
             }
+            us_write += now_us() - q;
             lba += k;
             left -= bytes;
             done += bytes;
+            since += bytes;
             if (progress != NULL) {
                 progress((uint32_t)(done >> 10), (uint32_t)(total >> 10));
             }
         }
-        if (fclose(out) != 0) {
+        q = now_us();
+        if (close(out) != 0) {
             ok = 0;
         }
-        remove(path);
-        if (!ok || rename(part, path) != 0) {
-            remove(part);
-            ok = 0;
+        us_close += now_us() - q;
+        /* the journal brought up to date now and then (each write of it costs the card's calls too) */
+        if (ok && (since >= JOURNAL_BYTES || (i + 1 - first) % JOURNAL_FILES == 0)) {
+            if (!journal_write(out_dir, image, n_entries, i + 1)) {
+                err = "a file could not be written (is the SD card full?)";
+                ok = 0;
+            }
+            since = 0;
         }
     }
     free(buf);
@@ -593,6 +840,18 @@ const char* dc_image_unpack_to(const char* dir, const char* out_dir, void (*prog
     if (!ok) {
         return fail("%s", err != NULL ? err : "the disc's files could not be written");
     }
-    host_log("disc image: %d files, %lu KB", n_entries, (unsigned long)(total >> 10));
+    /* the program's bytes checked, not their size alone: a bad unpacking redone from the start at the next start
+       (the journal set back to none finished, the image kept) */
+    if (!program_ok(out_dir)) {
+        journal_write(out_dir, image, n_entries, 0);
+        return fail("%s", "the unpacked files are not the disc's (1ST_READ.BIN's check failed): unpacked again at the next "
+                          "start");
+    }
+    index_write(out_dir);   /* the game's listing of the folder, so its first start need not list it */
+    snprintf(path, sizeof path, "%s/" JOURNAL, out_dir);
+    remove(path);       /* finished */
+    host_log("disc image: %d files, %lu KB in %ld s (reading the image %.1f s, making files %.1f s, writing %.1f s, "
+             "closing %.1f s)", n_entries, (unsigned long)(total >> 10), (long)(time(NULL) - t0), us_read / 1e6,
+             us_open / 1e6, us_write / 1e6, us_close / 1e6);
     return NULL;
 }
