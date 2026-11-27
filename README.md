@@ -1,9 +1,7 @@
 # Marvel vs. Capcom 2 for the PS Vita
 
 **AI Disclosure**:
-This project is AI assisted and heavily relied on Claude for the rendering pipeline/VitaGL, with that said, i myself also wrote portions
-of the code, and did some optimizing work with the limited knowledge i have about C and the hardware itself. No Gen AI
-was used for assets.
+AI-assisted development, i'm a C developer and i'm familiar with programming for embedded systems, with that said, i still have limited knowledge about the Vita hardware and i absolutely suck at 3D rendering, so AI was used to bridge that gap on my skillset. NO GEN AI was used in any of the artwork/assets, some of them are ripped straight from other releases of the game/the game itself and others are human-made by myself to fit the overall aesthetic
 
 A native PS Vita port of *Marvel vs. Capcom 2: New Age of Heroes* (Dreamcast/NAOMI version). It is not
 an emulator: the game's code is natively compiled for the Vita's ARM CPU, and the port supplies what the
