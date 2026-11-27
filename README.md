@@ -26,6 +26,26 @@ decompilation's own toolchain, tests and documentation live in there.
 3. Put the USA image of the disc (`.chd`, `.gdi`, `.cue`,
    or an `.iso` of track 3), in `ux0:data/mvc_2/disc/`. An image is unpacked into that folder at the first start. (Takes about 2 minutes)
 
+### Unpacking on a computer instead (optional)
+
+The disc's files can be unpacked on a PC and copied to the Vita, in place of step 3: nothing is unpacked on the
+console then, and the image never has to go onto the memory card. Download the unpacker for your system from the
+Releases page (`mvc2_extract-windows-x86_64.exe` or `mvc2_extract-linux-x86_64`), then:
+
+1. Unpack the image:
+   - **Windows:** drag the image file (`.chd`, `.gdi`, `.cue` or `.iso`) onto `mvc2_extract-windows-x86_64.exe`,
+     or from a command prompt: `mvc2_extract-windows-x86_64.exe "C:\path\to\image.chd"`
+   - **Linux:** `chmod +x mvc2_extract-linux-x86_64` then `./mvc2_extract-linux-x86_64 /path/to/image.chd`
+
+   The files go into a `disc` folder beside the image (or a folder given as a second argument). The unpacker
+   checks them against the USA disc and says so if anything is missing.
+2. Copy **everything** in that `disc` folder, its 32 subfolders included, to `ux0:data/mvc_2/disc/` on the Vita
+   using VitaShell.
+3. Start the game: it finds the files already unpacked and goes straight to the settings menu.
+
+Building the unpacker yourself? see `ports/tools/extract/CMakeLists.txt` (CMake; for Windows from Linux, with
+mingw-w64 and `ports/tools/extract/mingw64.cmake`).
+
 ## Building
 
 See [ports/README.md](ports/README.md): VitaSDK with vitaGL, then CMake and Ninja.
