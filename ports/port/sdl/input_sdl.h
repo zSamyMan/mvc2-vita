@@ -16,7 +16,7 @@ typedef struct {
     uint32_t bit;           /* 0 for the coin */
 } INPUT_ACTION;
 
-enum { BIND_NONE, BIND_KEY, BIND_BUTTON, BIND_AXIS };
+enum { BIND_NONE, BIND_KEY, BIND_BUTTON, BIND_AXIS, BIND_TOUCH };  /* BIND_TOUCH (the Vita): the rear panel's upper left (0) or right (1) */
 
 typedef struct {
     int type;
@@ -39,5 +39,10 @@ void input_load(void);
 void input_save(int pl);
 void input_set(int pl, int action, const BINDING* b);
 const char* binding_name(const BINDING* b, char* buf, size_t size);
+#ifdef __vita__
+/* CONTROL_SCHEME (VITA, PS2 or GRIP; VITA unless one of the others) and RIGHT_STICK (its right stick's combinations,
+   on unless 0): the controller's bindings, for both players, in place of mvc2.cfg's */
+void input_scheme(const char* scheme, int right_stick);
+#endif
 
 #endif

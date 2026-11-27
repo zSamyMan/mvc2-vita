@@ -1,7 +1,7 @@
 # env.txt e ferramentas de debug (PS Vita)
 
 O arquivo `ux0:data/mvc_2/env.txt` tem uma variável por linha, no formato `NOME=valor`. Ele é lido uma vez, quando o
-jogo inicia. Uma variável ausente usa o padrão indicado. Só as variáveis abaixo são aceitas: qualquer outra linha é
+jogo inicia. O menu de configurações (abaixo) grava as opções do jogador nele; as outras linhas são mantidas. Uma variável ausente usa o padrão indicado. Só as variáveis abaixo são aceitas: qualquer outra linha é
 ignorada (e anotada no `mvc2.log` como "left out"). Os ajustes internos do port usam sempre os seus padrões.
 
 ## Opções do jogador
@@ -9,8 +9,37 @@ ignorada (e anotada no `mvc2.log` como "left out"). Os ajustes internos do port 
 | Variável | Padrão | Descrição |
 |---|---|---|
 | `ASPECT_RATIO` | `WIDE` | `ORIGINAL`: 4:3 com as bordas ilustradas nas laterais. `STRETCHED`: 4:3 esticado para 16:9. `WIDE`: widescreen real, com a interface ajustada aos cantos. |
-| `CLOCKS` | `333` | `333`: ARM 333, GPU 222, crossbar 111 MHz, barramento 166 (a GPU acima dos 166 do perfil padrão do Vita, para os Hyper Combo Finish com muitas camadas transparentes). `444`: ARM 444, barramento e GPU 222, crossbar 166. Esquenta mais e gasta mais bateria; serve para comparar. |
+| `PRESET` | `BALANCED` | Os clocks. `STOCK`: os do próprio Vita (ARM 333, GPU 166, crossbar 111 MHz, barramento 166); os Hyper Combo Finish mais pesados podem perder quadros. `BALANCED`: ARM 333, GPU 222, crossbar 111, barramento 166 (60 FPS constantes no Abyss). `PERFORMANCE`: ARM 444, barramento e GPU 222, crossbar 166; esquenta mais e gasta mais bateria. |
+| `BORDERS` | `ARTWORK1` | Só com `ASPECT_RATIO=ORIGINAL`: `ARTWORK1` e `ARTWORK2` mostram um dos dois artworks nas laterais (`ARTWORK`, o valor antigo, vale como `ARTWORK1`); `NONE` deixa as laterais pretas. |
+| `CONTROL_SCHEME` | `VITA` | Os controles (as imagens da tela CONTROL TYPE). Em todos: quadrado soco fraco, triângulo soco forte, X chute fraco, círculo chute forte. `VITA`: L assist 1, R assist 2. `PS2`: L assist 1, painel traseiro esquerdo assist 2, R troca para o parceiro 1, painel traseiro direito troca para o parceiro 2. `GRIP`: L assist 1, R assist 2, painel traseiro direito soco fraco + forte, esquerdo chute fraco + forte. O painel traseiro conta só na metade de cima. |
+| `RIGHT_STICK` | `ON` | O analógico direito do esquema. `VITA` e `PS2`: cima soco fraco + forte, baixo chute fraco + forte. `GRIP`: cima troca para o parceiro 1, baixo para o parceiro 2. `OFF`: o analógico direito não faz nada. |
+| `SECRET_FACTOR` | (o do jogo) | `UNLOCKED`: todos os personagens, cores e extras secretos liberados. `LOCKED`: liberados jogando, como no Dreamcast. |
+| `CONFIG_MENU` | `ON` | `ON`: o menu de configurações aparece a cada início. `OFF` ("Don't show this again at startup"): só aparece segurando SELECT enquanto o jogo inicia. |
 | `DEBUG_OPTIONS` | `1` | `1` liga as ferramentas de teste: log (`mvc2.log`), menu de debug, overlay, atalhos com SELECT (capturas, dumps, sequências), a imagem do renderizador por software junto de cada captura e as variáveis de teste abaixo. `0` desliga tudo isso: é a configuração de quem só vai jogar. |
+
+## Menu de configurações
+
+Aparece depois da extração do disco, antes do jogo (com `CONFIG_MENU=OFF`, só segurando SELECT no início). Duas
+telas, com o fundo e as pílulas do menu de opções do Dreamcast (`DM0CTEX.BIN`) e a fonte do jogo
+(`S24RM04.BIN`):
+
+- **GAME SETUP**: ASPECT RATIO, SECRET FACTOR, RIGHT ANALOG STICK, PRESET e DEBUG OPTIONS. UP/DOWN escolhem,
+  LEFT/RIGHT (ou X) mudam; NEXT (X) vai para a próxima tela. A caixa de baixo explica a opção escolhida. Com
+  ORIGINAL, uma caixa ao lado de ASPECT RATIO escolhe NO BORDERS, ARTWORK 1 ou ARTWORK 2 (DOWN a partir de ASPECT RATIO).
+- **CONTROL TYPE**: VITA, PS2 ou GRIP, sobre a imagem do esquema; "Don't show this again at startup" (X marca);
+  BACK (ou O) volta; START GAME começa o jogo.
+
+Também funciona pelo toque na tela: tocar num item o seleciona; tocar de novo nele muda o valor (nas setas, para
+aquele lado). NEXT, BACK, START GAME, a caixa de seleção e "Press START to save" agem no primeiro toque.
+
+START, em qualquer tela, grava o `env.txt` e começa o jogo. ASPECT RATIO, BORDERS, PRESET, os controles e SECRET FACTOR valem
+na hora; DEBUG OPTIONS vale a partir do próximo início. Os scripts de teste gravam `CONFIG_MENU=OFF`.
+
+## Toque nos menus do jogo
+
+Fora da luta (e com o jogo pausado), a tela de toque navega os menus do próprio jogo: arrastar o dedo mais de 40
+pixels é o direcional para aquele lado (segurando, repete); um toque é X (confirma); dois dedos são O (volta);
+segurar parado por cerca de 2/3 de segundo é START. Durante a luta o toque não faz nada.
 
 ## Variáveis de teste (só com `DEBUG_OPTIONS=1`)
 

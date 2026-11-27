@@ -107,6 +107,7 @@ void host_divzero_install(void);    /* a division by zero gives 0, as SHC's code
 struct tm;
 void host_clock(struct tm* tm);
 extern int host_unlock;             /* unlock = all */
+extern volatile unsigned host_fight_frames, host_pause_frames;  /* nl_am.c: fight frames drawn, pause frames run */
 extern int host_freeplay;           /* freeplay = on */
 void* host_user_eeprom(void);       /* the game's settings, as the EEPROM keeps them (nl_am.c), or NULL */
 void* host_user_backup(void);       /* and its book-keeping, as the backup memory does */

@@ -243,6 +243,16 @@ void host_clock(struct tm* out) {
 
 int host_unlock;
 
+/* the game's fight drawn (src/disp.c's game_disp), its pause's menus run (src/pl_sw.c's pause_main): counted each
+   frame, for the Vita's touch screen, which works the menus only outside a fight or in its pause */
+volatile unsigned host_fight_frames, host_pause_frames;
+void host_fight_frame(void) {
+    host_fight_frames++;
+}
+void host_pause_frame(void) {
+    host_pause_frames++;
+}
+
 void nlaGetRTC(NLA_RTC_DATE* date) {
     struct tm now, *tm = &now;
     host_clock(&now);

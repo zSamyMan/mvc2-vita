@@ -20,6 +20,21 @@ void rd_vgl_boot_progress(int permille);
 void rd_vgl_boot_wait(void);
 /* no game data: the warning screen shown from now on */
 void rd_vgl_warning(void);
+/* the settings menu (config_menu.c), drawn before the game's first frame: draw is called on the render thread for
+   each of its frames (the screen cleared before, swapped after) with only the rd_vgl_2d calls below; NULL ends it,
+   done called there once (its textures freed) and ASPECT_RATIO read again before this returns */
+void rd_vgl_menu(void (*draw)(void), void (*done)(void));
+/* on the render thread, in draw or done only: an RGBA 8888 texture (rows top down; linear: filtered), and freed */
+unsigned rd_vgl_2d_texture(const void* rgba, int w, int h, int linear);
+void rd_vgl_2d_free(unsigned tex);
+/* triangles in screen pixels (960 by 544, top down) over what is there, blended by their alpha: the texture (0 for
+   plain white) times the vertex colour (r g b a in its bytes, lowest first) */
+typedef struct {
+    float x, y, u, v;
+    unsigned rgba;
+} RD2D_VTX;
+void rd_vgl_2d_draw(unsigned tex, const RD2D_VTX* v, int n);
+
 /* the overlay's figures: a thread's CPU share (by its id), the game's frame times from the front end */
 void rd_vgl_watch_thread(const char* name, int id);
 void rd_vgl_game_stats(float game_ms, float sound_ms, float worst_ms);

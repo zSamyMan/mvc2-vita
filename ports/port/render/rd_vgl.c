@@ -3690,6 +3690,24 @@ static void pic_draw(GLuint tex, float tw, float th, float x0, float y0, float x
 /* ASPECT_RATIO=ORIGINAL: the pillars beside the game's 4:3 drawn from Borders.png (its middle, where the game is,
    transparent in the PNG, is not drawn) */
 static GLuint borders_tex;
+static int borders_art = 1;     /* BORDERS (env.txt): ARTWORK1 (the default) borders.565, ARTWORK2 borders2.565, NONE black */
+static int borders_loaded;      /* which of them borders_tex holds */
+
+/* the borders' picture BORDERS asks for, loaded (or freed) on the render thread */
+static void borders_pick(void) {
+    int want = aspect_mode == ASPECT_ORIGINAL ? borders_art : 0;
+    if (want == borders_loaded && (want == 0 || borders_tex != 0)) {
+        return;
+    }
+    if (borders_tex != 0) {
+        glDeleteTextures(1, &borders_tex);
+        borders_tex = 0;
+    }
+    if (want != 0) {
+        borders_tex = pic_load(want == 2 ? "borders2" : "borders");
+    }
+    borders_loaded = want;
+}
 static void draw_borders(void) {
     float r0 = view_x0 + view_w;
     if (aspect_mode != ASPECT_ORIGINAL || borders_tex == 0) {
@@ -3944,10 +3962,130 @@ static void draw_frame(void) {
     perf.gl_us += now_us() - t0;
 }
 
-static int render_main(SceSize args, void* argp) {
-    int i, ok;
+/* ---- the settings menu's drawing (config_menu.c), before the game's first frame ---- */
+
+static void (*volatile menu_draw)(void);
+static void (*volatile menu_done)(void);
+static volatile int menu_closing, menu_closed, menu_live;
+static GLuint white_tex;
+static void aspect_setup(void);
+
+void rd_vgl_menu(void (*draw)(void), void (*done)(void)) {
+    int i;
+    if (draw != NULL) {
+        menu_done = done;
+        menu_closed = 0;
+        __sync_synchronize();
+        menu_draw = draw;
+        return;
+    }
+    menu_draw = NULL;
+    __sync_synchronize();
+    menu_closing = 1;
+    for (i = 0; i < 3000 && !menu_closed; i++) {
+        sceKernelDelayThread(1000);
+    }
+    if (!menu_closed) {
+        host_log("vgl: the settings menu not closed after 3 s");
+    }
+}
+
+unsigned rd_vgl_2d_texture(const void* rgba, int w, int h, int linear) {
+    GLuint t;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    cur.tex = t;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    return t;
+}
+
+void rd_vgl_2d_free(unsigned tex) {
+    GLuint t = tex;
+    if (t != 0) {
+        glDeleteTextures(1, &t);
+    }
+}
+
+void rd_vgl_2d_draw(unsigned tex, const RD2D_VTX* v, int n) {
+    static const float zero[4] = { 0, 0, 0, 0 }, modulate[4] = { 1, 1, 0, 1 };
+    static VTX q[1536];
+    float size[4] = { 0, 0, 1, 1 };
+    int i, op;
+    if (n > (int)(sizeof q / sizeof q[0])) {
+        n = (int)(sizeof q / sizeof q[0]);
+    }
+    if (n <= 0) {
+        return;
+    }
+    if (tex == 0) {
+        static const uint32_t white = 0xffffffffu;
+        if (white_tex == 0) {
+            white_tex = rd_vgl_2d_texture(&white, 1, 1, 0);
+        }
+        tex = white_tex;
+    }
+    memset(q, 0, sizeof q[0] * (size_t)n);
+    for (i = 0; i < n; i++) {
+        q[i].x = v[i].x / SCREEN_W * 2 - 1, q[i].y = 1 - v[i].y / SCREEN_H * 2, q[i].z = 0.0f, q[i].w = 1.0f;
+        q[i].u = v[i].u, q[i].v = v[i].v;
+        memcpy(q[i].base, &v[i].rgba, 4);
+        memcpy(q[i].clamp, no_clamp, sizeof no_clamp);
+        q[i].fw = 1.0f;
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, SCREEN_W, SCREEN_H);
+    op = program_for(P_TEX + P_SHADE * 7);    /* modulate alpha, the texel's alpha */
+    use_program(op);
+    set_uniform(op, 0, progs[op].shade, modulate);
+    set_uniform(op, 1, progs[op].fog, zero);
+    set_uniform(op, 2, progs[op].fog_color, zero);
+    set_uniform(op, 3, progs[op].misc, size);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    cur.tex = tex;
+    set_blend(1, RD_SRC_ALPHA, RD_INV_SRC_ALPHA);
+    set_depth(RD_ALWAYS, 0);
+    attribs(q);
+    glDrawArrays(GL_TRIANGLES, 0, n);
+}
+
+/* one of the menu's frames, or its end: its textures freed and ASPECT_RATIO read again (the borders' picture with
+   ORIGINAL) */
+static void menu_frame(void) {
+    void (*draw)(void) = menu_draw;
+    if (draw != NULL) {
+        if (!menu_live) {
+            host_log("vgl: the settings menu on");
+        }
+        menu_live = 1;
+        glViewport(0, 0, SCREEN_W, SCREEN_H);
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        draw();
+        vglSwapBuffers(GL_FALSE);
+        return;
+    }
+    if (menu_live && menu_done != NULL) {
+        menu_done();
+    }
+    rd_vgl_2d_free(white_tex);
+    white_tex = 0;
+    menu_live = 0;
+    aspect_setup();
+    borders_pick();
+    host_log("vgl: the settings menu closed; aspect %d", aspect_mode);
+    menu_closing = 0;
+    __sync_synchronize();
+    menu_closed = 1;
+}
+
+/* ASPECT_RATIO's picture: at the start, and again when the settings menu closes (before the game's first frame) */
+static void aspect_setup(void) {
     const char* aspect = getenv("MVC2_ASPECT");
-    (void)args, (void)argp;
     if (aspect == NULL) {
         aspect = config_get("aspect");
     }
@@ -3959,6 +4097,11 @@ static int render_main(SceSize args, void* argp) {
         } else if (aspect != NULL) {
             aspect_mode = strcmp(aspect, "stretch") == 0 ? ASPECT_STRETCHED : ASPECT_ORIGINAL;
         }
+    }
+    game_x0 = 0.0f, game_w = RD_WIDTH, host_wide_x = 0.0f;
+    {
+        const char* b = getenv("BORDERS");
+        borders_art = b != NULL && strcasecmp(b, "NONE") == 0 ? 0 : b != NULL && strcasecmp(b, "ARTWORK2") == 0 ? 2 : 1;
     }
     view_w = aspect_mode == ASPECT_ORIGINAL ? SCREEN_H * 4.0f / 3.0f : SCREEN_W;
     if (aspect_mode == ASPECT_WIDE) {
@@ -3973,6 +4116,12 @@ static int render_main(SceSize args, void* argp) {
        snap's game pixels must be exactly the ones the geometry lands on */
     view_w = (float)((int)view_w & ~1);
     view_x0 = (float)(((int)SCREEN_W - (int)view_w) / 2);
+}
+
+static int render_main(SceSize args, void* argp) {
+    int i, ok;
+    (void)args, (void)argp;
+    aspect_setup();
     /* the GPU's room for a frame's geometry (its parameter buffer): a hyper combo's many large translucent
        triangles filled the default, and the GPU then stalled the next frame's start by up to half a second */
     vglSetParamBufferSize(48 * 1024 * 1024);   /* 32 MB: half-second stalls came back in hypers once a vertex carried its clamp too */
@@ -4072,8 +4221,8 @@ static int render_main(SceSize args, void* argp) {
         control_start();
     }
     io_start();
-    if (aspect_mode == ASPECT_ORIGINAL) {
-        borders_tex = pic_load("borders");
+    if (aspect_mode == ASPECT_ORIGINAL && borders_art) {
+        borders_pick();
     }
     started_ok = 1;
     sceKernelSignalSema(sem_started, 1);
@@ -4087,11 +4236,14 @@ static int render_main(SceSize args, void* argp) {
            while this waits, before the game's first frame) has its screen drawn each time none came. A frame comes
            every 16.7 ms in a game, so the wait runs out only in a pause */
         for (;;) {
-            SceUInt timeout = 33000;
+            /* the settings menu: drawn at each vertical blank (the swap waits for it) */
+            SceUInt timeout = menu_draw != NULL || menu_closing ? 1000 : 33000;
             if (sceKernelWaitSema(sem_ready, 1, &timeout) >= 0) {
                 break;
             }
-            if (boot_on) {
+            if (menu_draw != NULL || menu_closing) {
+                menu_frame();
+            } else if (boot_on) {
                 draw_boot();
             } else if (warn_on) {
                 draw_warning();

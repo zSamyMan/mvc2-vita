@@ -12,5 +12,9 @@ void vita_early_init(void);     /* first thing in main(): the folder, the log, t
 int vita_map_ram(void);         /* main RAM at 0x8C000000, aliased at 0xAC000000 (kubridge) */
 void vita_frame(void);          /* once a frame: what the abort handler saw goes to the log */
 extern int vita_debug;          /* DEBUG_OPTIONS: 1 (the default) the testing tools on, 0 all off */
+void vita_clocks_apply(void);    /* PRESET (env.txt) set: at the start, and when the settings menu closes */
+/* the settings menu (config_menu.c), in start_game before the game: shown when CONFIG_MENU is not OFF or SELECT is
+   held; writes env.txt and sets its variables. disc: the unpacked disc's folder (its textures and font) */
+void vita_config_menu(const char* disc);
 
 #endif

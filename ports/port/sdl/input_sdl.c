@@ -8,6 +8,8 @@
 
 #include "sdl_front.h"
 #ifdef __vita__
+#include <strings.h>
+#include <psp2/touch.h>
 #include "vita_debug_menu.h"
 #endif
 
@@ -261,8 +263,174 @@ int input_menu_combo(int pl) {
            SDL_GetGamepadButton(pads[pl], SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
 }
 
+#ifdef __vita__
+/* the rear panel's upper half, its left and right (as seen from the front: the left the left hand's fingers), read
+   once a frame */
+static int rear_zone[2], rear_used;    /* rear_used: the scheme has the rear panel (PS2, GRIP) */
+
+static void rear_touch_read(void) {
+    static int ready, mid_x = 960, mid_y = 500;
+    SceTouchData d;
+    int i;
+    if (!ready) {
+        SceTouchPanelInfo pi;
+        sceTouchSetSamplingState(SCE_TOUCH_PORT_BACK, SCE_TOUCH_SAMPLING_STATE_START);
+        if (sceTouchGetPanelInfo(SCE_TOUCH_PORT_BACK, &pi) >= 0 && pi.maxAaX > pi.minAaX) {
+            mid_x = (pi.minAaX + pi.maxAaX) / 2;
+            mid_y = (pi.minAaY + pi.maxAaY) / 2;
+        }
+        ready = 1;
+    }
+    rear_zone[0] = rear_zone[1] = 0;
+    if (!rear_used || sceTouchPeek(SCE_TOUCH_PORT_BACK, &d, 1) < 1) {
+        return;
+    }
+    for (i = 0; i < (int)d.reportNum && i < SCE_TOUCH_MAX_REPORT; i++) {
+        if (d.report[i].y < mid_y) {
+            rear_zone[d.report[i].x < mid_x ? 0 : 1] = 1;
+        }
+    }
+}
+
+static void put(int pl, int a, BINDING b) {
+    int i;
+    for (i = 0; i < MAX_BINDINGS && bindings[pl][a][i].type != BIND_NONE; i++) {
+    }
+    if (i < MAX_BINDINGS) {
+        bindings[pl][a][i] = b;
+    }
+}
+
+/*
+ * The front touch screen on the game's menus (not in a fight, unless it is paused): a drag past 40 pixels from where
+ * the finger came down is the D-pad that way (again after 20 frames held, then every 8); a tap is X (light kick, the
+ * menus' decide), a long press (40 frames) START, a two-finger tap O (heavy kick, back)
+ */
+static uint32_t touch_menu_bits(void) {
+    enum { DRAG = 40, PULSE = 3, LONG = 40 };
+    static int ready, down, sx, sy, moved, dir, rep, held, two, long_sent, pulse_left;
+    static uint32_t pulse_bit;
+    static unsigned fight_seen, pause_seen, fight_quiet = 999, pause_quiet = 999;
+    SceTouchData d;
+    uint32_t out = 0;
+    int n;
+    if (!ready) {
+        sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT, SCE_TOUCH_SAMPLING_STATE_START);
+        ready = 1;
+    }
+    /* a fight drawn in the last 10 frames, and no pause: the screen left alone */
+    fight_quiet = host_fight_frames != fight_seen ? 0 : fight_quiet + 1;
+    pause_quiet = host_pause_frames != pause_seen ? 0 : pause_quiet + 1;
+    fight_seen = host_fight_frames, pause_seen = host_pause_frames;
+    if (fight_quiet < 10 && pause_quiet >= 10) {
+        down = 0, pulse_left = 0;
+        return 0;
+    }
+    n = sceTouchPeek(SCE_TOUCH_PORT_FRONT, &d, 1) > 0 ? (int)d.reportNum : 0;
+    if (n > 0) {
+        int x = d.report[0].x / 2, y = d.report[0].y / 2, dx, dy, ax, ay, way;
+        if (!down) {
+            down = 1, sx = x, sy = y, moved = 0, dir = -1, rep = 0, held = 0, two = 0, long_sent = 0;
+        }
+        two |= n >= 2;
+        held++;
+        dx = x - sx, dy = y - sy, ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+        if ((ax > ay ? ax : ay) > DRAG) {
+            way = ax > ay ? (dx > 0 ? 3 : 2) : (dy > 0 ? 1 : 0);    /* the actions: up, down, left, right */
+            moved = 1;
+            if (way != dir) {
+                dir = way, rep = 0;
+            }
+            if (rep < PULSE || (rep >= 20 && (rep - 20) % 8 < PULSE)) {
+                out |= input_actions[dir].bit;
+            }
+            rep++;
+        } else {
+            dir = -1;
+        }
+        if (!moved && !two && !long_sent && held >= LONG) {
+            long_sent = 1, pulse_bit = input_actions[10].bit, pulse_left = PULSE + 1;     /* START */
+        }
+    } else if (down) {
+        down = 0;
+        if (!moved && !long_sent && held < LONG) {
+            pulse_bit = input_actions[two ? 8 : 7].bit, pulse_left = PULSE + 1;          /* O or X */
+        }
+    }
+    if (pulse_left > 0) {
+        out |= pulse_bit;
+        pulse_left--;
+    }
+    return out;
+}
+
+#define TOUCH(z) { BIND_TOUCH, z, 0 }
+
+/*
+ * The schemes (the settings menu's pictures: ports/port/vita/assets' PS2, Vita and Grip_Controls.png). The face buttons the same in
+ * all: square light punch, triangle heavy punch, cross light kick, circle heavy kick. A tag is light punch and light
+ * kick together (partner 1), heavy punch and heavy kick (partner 2): src/pl_com.c's pl_change_ck.
+ *   VITA  L assist 1, R assist 2; the right stick up light and heavy punch, down light and heavy kick
+ *   PS2   L assist 1, the rear's left assist 2, R tags partner 1, the rear's right partner 2; the right stick as VITA's
+ *   GRIP  L assist 1, R assist 2; the rear's right light and heavy punch, its left light and heavy kick; the right
+ *         stick up tags partner 1, down partner 2
+ */
+void input_scheme(const char* scheme, int right_stick) {
+    enum { LP = 4, HP, A1, LK, HK, A2 };
+    static const BINDING face[6] = { BUTTON(WEST), BUTTON(NORTH), { BIND_NONE }, BUTTON(SOUTH), BUTTON(EAST),
+                                     { BIND_NONE } };
+    const BINDING l = BUTTON(LEFT_SHOULDER), r = BUTTON(RIGHT_SHOULDER), up = AXIS(RIGHTY, -1), down = AXIS(RIGHTY, 1);
+    const BINDING rear_l = TOUCH(0), rear_r = TOUCH(1);
+    int ps2 = scheme != NULL && strcasecmp(scheme, "PS2") == 0;
+    int grip = scheme != NULL && strcasecmp(scheme, "GRIP") == 0;
+    int pl, a;
+    rear_used = ps2 || grip;
+    for (pl = 0; pl < 2; pl++) {
+        for (a = 0; a < ACTIONS; a++) {
+            input_defaults(pl, a);
+        }
+        for (a = LP; a <= A2; a++) {
+            memset(bindings[pl][a], 0, sizeof bindings[pl][a]);
+            if (key_defaults[pl][a].type != BIND_NONE) {
+                put(pl, a, key_defaults[pl][a]);
+            }
+            if (face[a - LP].type != BIND_NONE) {
+                put(pl, a, face[a - LP]);
+            }
+        }
+        put(pl, A1, l);
+        if (grip) {
+            put(pl, A2, r);
+            put(pl, LP, rear_r), put(pl, HP, rear_r);
+            put(pl, LK, rear_l), put(pl, HK, rear_l);
+            if (right_stick) {
+                put(pl, LP, up), put(pl, LK, up);
+                put(pl, HP, down), put(pl, HK, down);
+            }
+            continue;
+        }
+        if (ps2) {
+            put(pl, A2, rear_l);
+            put(pl, LP, r), put(pl, LK, r);
+            put(pl, HP, rear_r), put(pl, HK, rear_r);
+        } else {
+            put(pl, A2, r);
+        }
+        if (right_stick) {
+            put(pl, LP, up), put(pl, HP, up);
+            put(pl, LK, down), put(pl, HK, down);
+        }
+    }
+    host_log("input: control scheme %s, right stick %s", grip ? "GRIP" : ps2 ? "PS2" : "VITA", right_stick ? "on" : "off");
+}
+#endif
+
 int input_held(int pl, const BINDING* b) {
     switch (b->type) {
+#ifdef __vita__
+    case BIND_TOUCH:
+        return pl == 0 && b->code >= 0 && b->code < 2 && rear_zone[b->code];
+#endif
     case BIND_KEY:
         return key_held(b->code);
     case BIND_BUTTON:
@@ -276,6 +444,10 @@ int input_held(int pl, const BINDING* b) {
 void input_read(HOST_INPUT* in) {
     static int coin_held;
     int pl, a, i, coin = 0;
+#ifdef __vita__
+    rear_touch_read();
+    in->player[0] |= touch_menu_bits();
+#endif
     for (pl = 0; pl < 2; pl++) {
         for (a = 0; a < ACTIONS; a++) {
             for (i = 0; i < MAX_BINDINGS && bindings[pl][a][i].type != BIND_NONE; i++) {

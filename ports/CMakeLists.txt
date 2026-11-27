@@ -208,7 +208,7 @@ else()
     if(VITA)
         # the GPU back end on its render thread (MVC2_RENDERER=soft: rd_soft.c through SDL's renderer)
         list(APPEND FRONT_SOURCES ${PORT}/vita/vita_sys.c ${PORT}/render/rd_vgl.c ${PORT}/vita/vita_code.c
-            ${PORT}/vita/vita_debug_menu.c)
+            ${PORT}/vita/vita_debug_menu.c ${PORT}/vita/config_menu.c)
         # the sound CPU translated to the A9's own ARM code (MVC2_ARMJIT / MVC2_ARMJIT2), code memory from kubridge
         list(APPEND HOST_SOURCES ${PORT}/snd/arm7_jit.c ${PORT}/snd/arm7_jit2.c)
         set_source_files_properties(${PORT}/snd/arm7.c PROPERTIES COMPILE_DEFINITIONS ARM7_JIT)
@@ -492,8 +492,12 @@ function(mvc2_executable TARGET)
         endif()
         # the renderer's pictures (ports/tools/vita_assets.py makes each .565 from its PNG): ASPECT_RATIO=ORIGINAL's
         # borders, the first start's unpacking screen and the no-data warning
-        foreach(pic borders first_boot warning)
+        foreach(pic borders borders2 first_boot warning)
             list(APPEND VITA_ASSETS FILE ${PORT}/vita/assets/${pic}.565 assets/${pic}.565)
+        endforeach()
+        # the settings menu's: its control schemes' pictures and its icons (RGBA 8888)
+        foreach(pic ctl_ps2 ctl_vita ctl_grip menu_icons)
+            list(APPEND VITA_ASSETS FILE ${PORT}/vita/assets/${pic}.rgba assets/${pic}.rgba)
         endforeach()
         # the libraries' notices and licenses with every copy (vitaGL and vitaShaRK are LGPL-3.0, linked statically)
         list(APPEND VITA_ASSETS FILE ${CMAKE_CURRENT_SOURCE_DIR}/NOTICE.md licenses/NOTICE.md)

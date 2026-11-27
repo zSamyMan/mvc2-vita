@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
@@ -438,14 +439,17 @@ int vita_map_ram(void) {
 }
 
 /*
- * env.txt takes only these. The player's: ASPECT_RATIO, CLOCKS, DEBUG_OPTIONS (0 or 1, 1 unless set: 0 turns off every
+ * env.txt takes only these (the settings menu, config_menu.c, writes them). The player's: ASPECT_RATIO, BORDERS
+ * (ARTWORK or NONE: ORIGINAL's sides), PRESET (STOCK, BALANCED or PERFORMANCE: the clocks), CONTROL_SCHEME (VITA, PS2 or GRIP), RIGHT_STICK (ON or OFF: the scheme's right stick), SECRET_FACTOR (UNLOCKED or
+ * LOCKED), CONFIG_MENU (OFF: the menu only with SELECT held at the start), DEBUG_OPTIONS (0 or 1, 1 unless set: 0 turns off every
  * tool made for testing, for a players' build: the log, the overlay, the pictures, dumps and bursts and their SELECT
  * keys, the debug menu, the TTY and the watchdog). With DEBUG_OPTIONS=1 also the test runs' MVC2_STAGE, MVC2_BOSS and
  * MVC2_TEST. Any other line is noted in the log and left out: the program's own settings keep their defaults, and the
  * tools DEBUG_OPTIONS turns on are on with it (the software renderer's picture beside each capture)
  */
 int vita_debug = 1;
-static const char* const player_vars[] = { "ASPECT_RATIO", "CLOCKS", "DEBUG_OPTIONS" };
+static const char* const player_vars[] = { "ASPECT_RATIO", "BORDERS", "PRESET", "DEBUG_OPTIONS", "CONTROL_SCHEME",
+                                            "RIGHT_STICK", "SECRET_FACTOR", "CONFIG_MENU" };
 static const char* const debug_vars[] = { "MVC2_STAGE", "MVC2_BOSS", "MVC2_TEST" };
 
 static int listed_in(const char* name, const char* const* list, int n) {
@@ -478,6 +482,34 @@ int host_first_stage(void) {
     const char* v = getenv("MVC2_BOSS");
     int n = v != NULL ? atoi(v) : 0;
     return n < 0 ? 0 : n > 7 ? 7 : n;
+}
+
+/* PRESET (env.txt): STOCK (the Vita's own: ARM 333, bus 166, GPU 166, crossbar 111 MHz), BALANCED (the default: the
+   GPU at 222) or PERFORMANCE (ARM 444, bus 222, GPU 222, crossbar 166: more heat and battery). At the start, and again
+   when the settings menu closes */
+void vita_clocks_apply(void) {
+    const char* p = getenv("PRESET");
+    if (p != NULL && strcasecmp(p, "STOCK") == 0) {
+        scePowerSetArmClockFrequency(333);
+        scePowerSetBusClockFrequency(166);
+        scePowerSetGpuClockFrequency(166);
+        scePowerSetGpuXbarClockFrequency(111);
+    } else if (p != NULL && strcasecmp(p, "PERFORMANCE") == 0) {
+        scePowerSetArmClockFrequency(444);
+        scePowerSetBusClockFrequency(222);
+        scePowerSetGpuClockFrequency(222);
+        scePowerSetGpuXbarClockFrequency(166);
+    } else {
+        /* the GPU at 222 (ARM, bus and crossbar the Vita's own): Abyss's triple hyper finish, its screen of large
+           translucent layers, kept the GPU past a frame's 16.7 ms at 166 (the swap waited up to 20 ms for it) */
+        scePowerSetArmClockFrequency(333);
+        scePowerSetBusClockFrequency(166);
+        scePowerSetGpuClockFrequency(222);
+        scePowerSetGpuXbarClockFrequency(111);
+    }
+    say("vita: preset %s: clocks ARM %d, bus %d, GPU %d, crossbar %d MHz", p != NULL ? p : "BALANCED",
+        scePowerGetArmClockFrequency(),
+        scePowerGetBusClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
 }
 
 void vita_early_init(void) {
@@ -553,23 +585,7 @@ void vita_early_init(void) {
     tty_on = getenv("MVC2_TTY") != NULL && atoi(getenv("MVC2_TTY")) != 0;
     say("vita: renderer %s, soft picture %s, texture skip %s", getenv("MVC2_RENDERER") ? getenv("MVC2_RENDERER") : "gpu",
         getenv("MVC2_RDQUALITY") ? getenv("MVC2_RDQUALITY") : "exact", getenv("MVC2_TEX_SKIP"));
-    /* CLOCKS (env.txt): 333 (the default: ARM 333, GPU 222, crossbar 111 MHz, bus 166) or 444
-       (ARM 444, bus 222, GPU 222, crossbar 166: more heat and battery, for comparison) */
-    if (getenv("CLOCKS") != NULL && atoi(getenv("CLOCKS")) == 444) {
-        scePowerSetArmClockFrequency(444);
-        scePowerSetBusClockFrequency(222);
-        scePowerSetGpuClockFrequency(222);
-        scePowerSetGpuXbarClockFrequency(166);
-    } else {
-        /* the GPU at 222 (ARM, bus and crossbar the Vita's own): Abyss's triple hyper finish, its screen of large
-           translucent layers, kept the GPU past a frame's 16.7 ms at 166 (the swap waited up to 20 ms for it) */
-        scePowerSetArmClockFrequency(333);
-        scePowerSetBusClockFrequency(166);
-        scePowerSetGpuClockFrequency(222);
-        scePowerSetGpuXbarClockFrequency(111);
-    }
-    say("vita: clocks ARM %d, bus %d, GPU %d, crossbar %d MHz", scePowerGetArmClockFrequency(),
-        scePowerGetBusClockFrequency(), scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency());
+    vita_clocks_apply();
     sceKernelGetFreeMemorySize(&mem);
     say("vita: free memory: user %d KB, CDRAM %d KB, phycont %d KB", mem.size_user >> 10, mem.size_cdram >> 10,
         mem.size_phycont >> 10);

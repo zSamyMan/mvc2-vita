@@ -1371,10 +1371,14 @@ static void training_menu( PAUSE_WORK *w, TRAINING_WORK *tw )
 /****************************************************************/
 /*			The pause, each frame the fight is held				*/
 /****************************************************************/
+extern void host_pause_frame( void ) ;	/* the port's: the pause's menus up (the Vita's touch screen works them) */
+
 void pause_main( void )
 {
 	PAUSE_WORK *w = &pause_work ;
 	TRAINING_WORK *tw = &training_work ;
+
+	host_pause_frame() ;
 
 	if( w->pause_flag & 4 ){
 		pause_out_move( w ) ;

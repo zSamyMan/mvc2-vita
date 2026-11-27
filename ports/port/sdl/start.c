@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #ifdef __3DS__
 #include "ctr_front.h"
@@ -473,6 +474,13 @@ int start_game(void) {
         if (dc_disc_missing(path[mode]) != NULL && !unpack_disc(path[mode])) {
             return 0;
         }
+#if defined(__vita__) && defined(MVC2_VITAGL)
+        /* the settings menu (once a run), then its SECRET_FACTOR: every character and colour, or the game's own */
+        vita_config_menu(path[mode]);
+        if (getenv("SECRET_FACTOR") != NULL) {
+            host_unlock = strcasecmp(getenv("SECRET_FACTOR"), "UNLOCKED") == 0;
+        }
+#endif
         host_keep_program(&dc_program);
         return dc_init(&dc_program, path[mode]);
     }

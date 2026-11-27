@@ -448,9 +448,13 @@ void disp_st_demo_end( void )
 /*			The fight's drawing, in the mode flash_flag_get		*/
 /*			gives												*/
 /****************************************************************/
+extern void host_fight_frame( void ) ;	/* the port's: a fight's frame drawn (the Vita's touch screen off for the menus) */
+
 void game_disp( void )
 {
 	int mode ;
+
+	host_fight_frame() ;
 
 	if( ( mode = flash_flag_get() ) ){
 		if( mode == 1 ){
